@@ -1,0 +1,103 @@
+التحول من قاعدة البيانات الافتراضية (H2) إلى PostgreSQL هي خطوة ممتازة واحترافية للإنتاج (Production) لضمان سرعة معالجة البيانات الضخمة القادمة من أجهزة الـ GPS وحفظ سجلات الصيانة والتنبيهات بأمان كامل.
+بما أنك قمت بنشر كِلا النظامين (Traccar و Django) على نفس سيرفر AWS، فمن الأفضل تثبيت خادم PostgreSQL على السيرفر مباشرة كخدمة أساسية، وجعل كِلا النظامين يتصلان به في نفس الوقت (بمجموعتي جداول منفصلة داخل نفس خادم البيانات لضمان التنظيم المالي والموارد).
+إليك خطوات التحول الكاملة بالتفصيل:
+
+الخطوة 1: تثبيت خادم PostgreSQL على سيرفر AWS
+
+اتصل بالسيرفر عبر الـ Terminal بصلاحيات الـ Root ونفذ أمر التثبيت:
+bash
+sudo apt update
+sudo apt install postgresql postgresql-contrib -y
+يُرجى استخدام الرمز البرمجي بحذر.
+
+الخطوة 2: إنشاء قواعد البيانات والمستخدمين
+
+سنقوم الآن بالدخول إلى مستخدم postgres لإنشاء قاعدة بيانات خاصة بنظام Traccar وقاعدة بيانات أخرى منفصلة لمشروع Django:
+1. الدخول إلى سطر أوامر PostgreSQL:bash
+sudo -i -u postgres psql
+يُرجى استخدام الرمز البرمجي بحذر.
+2. إنشاء مستخدم وقاعدة بيانات لنظام Traccar:sql
+CREATE USER traccar WITH PASSWORD 'TraccarPass2026';
+CREATE DATABASE traccar_db OWNER traccar;
+يُرجى استخدام الرمز البرمجي بحذر.
+3. إنشاء مستخدم وقاعدة بيانات لمشروع Django:sql
+CREATE USER django WITH PASSWORD 'DjangoPass2026';
+CREATE DATABASE django_db OWNER django;
+يُرجى استخدام الرمز البرمجي بحذر.
+4. الخروج من لوحة التحكم:sql
+\q
+يُرجى استخدام الرمز البرمجي بحذر.
+
+الخطوة 3: ربط نظام Traccar بقاعدة بيانات PostgreSQL
+
+لتغيير الإعدادات في حاوية Docker لـ Traccar، سنقوم فقط بتعديل ملف الـ XML الذي أنشأناه سابقاً ليقرأ من خادم البوستجرس بدلاً من الملف الافتراضي القديم.
+1. افتح ملف إعدادات تراكار:bash
+sudo nano /opt/traccar_new/traccar.xml
+يُرجى استخدام الرمز البرمجي بحذر.
+2. قم بحذف أسطر قاعدة البيانات القديمة (H2)، واستبدلها بالكامل بالإعدادات الاحترافية التالية لـ PostgreSQL:xml
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE properties SYSTEM 'http://sun.com'>
+<properties>
+    <entry key='config.default'>/opt/traccar/conf/default.xml</entry>
+
+    <!-- إعدادات الاتصال الجديدة بـ PostgreSQL لـ Traccar -->
+    <entry key='database.driver'>org.postgresql.Driver</entry>
+    <entry key='database.url'>jdbc:postgresql://localhost:5432/traccar_db</entry>
+    <entry key='database.user'>traccar</entry>
+    <entry key='database.password'>TraccarPass2026</entry>
+</properties>
+يُرجى استخدام الرمز البرمجي بحذر.
+(احفظ واخرج: Ctrl + O ثم Enter ثم Ctrl + X).
+3. لإخبار PostgreSQL بالسماح للحاوية بالاتصال بالشبكة المحلية (إذا واجهت مشكلة اتصال)، يفضل تشغيل الحاوية بنظام الشبكة المشتركة (Host Network) أو استخدام آي بي محلي، ولكن الأسهل هو إعادة تشغيل الحاوية لتقوم ببناء الجداول فوراً في PostgreSQL تلقائياً:bash
+docker rm -f traccar
+
+docker run \
+  --name traccar \
+  --detach \
+  --restart always \
+  --network="host" \
+  --volume /opt/traccar_new/logs:/opt/traccar/logs:rw \
+  --volume /opt/traccar_new/data:/opt/traccar/data:rw \
+  --volume /opt/traccar_new/traccar.xml:/opt/traccar/conf/traccar.xml:ro \
+  traccar/traccar:latest
+يُرجى استخدام الرمز البرمجي بحذر.
+(ملاحظة: استخدام --network="host" يلغي الحاجة لكتابة أرقام الـ --publish البورتات الكثيرة لأنه يفتح جميع منافذ الحاوية مباشرة على السيرفر، وهو ممتاز جداً لأداء تراكار البورت 8082 وبورتات الأجهزة 5001 كلها ستعمل فوراً).
+
+الخطوة 4: ربط مشروع Django بقاعدة بيانات PostgreSQL
+
+لكي يتحدث Django مع PostgreSQL، يتطلب حزمة ربط بايثون تسمى psycopg2.
+1. تفعيل بيئتك الافتراضية وتثبيت الحزمة:bash
+cd /opt/django_gps/
+source myenv/bin/activate
+pip install psycopg2-binary
+يُرجى استخدام الرمز البرمجي بحذر.
+2. افتح ملف إعدادات Django لتحديث حقل الـ DATABASES:bash
+sudo nano gps_project/settings.py
+يُرجى استخدام الرمز البرمجي بحذر.
+3. ابحث عن متغير DATABASES القديم (الخاص بـ sqlite3)، واستبدله بالكامل بالهيكل التالي:python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'django_db',
+        'USER': 'django',
+        'PASSWORD': 'DjangoPass2026',
+        'HOST': '127.0.0.1',
+        'PORT': '5432',
+    }
+}
+يُرجى استخدام الرمز البرمجي بحذر.
+(احفظ واخرج: Ctrl + O ثم Enter ثم Ctrl + X).
+4. توليد وتطبيق جداول مشروعك بالكامل (المستخدمين، الـ Tokens، الأجهزة، إعدادات الزيت، أرقام الطوارئ) على قاعدة البيانات الجديدة النظيفة:bash
+python manage.py migrate
+يُرجى استخدام الرمز البرمجي بحذر.
+5. بما أن قاعدة البيانات جديدة كلياً ونظيفة، قم بإنشاء حساب مسؤول (Superuser) جديد لإدارة النظام والمستخدمين والـ Tokens عبر المتصفح:bash
+python manage.py createsuperuser
+يُرجى استخدام الرمز البرمجي بحذر.
+(اتبع الخطوات في الـ Terminal لكتابة اسم الأدمن، البريد، الباسوورد).
+
+🎉 النتيجة النهائية:
+
+الآن، خادم السيرفر الخاص بك مدعوم بمحرك PostgreSQL العملاق في الخلفية.
+• يمكنك إعادة تشغيل خادم Django (runserver أو الخدمة المعتمدة في الـ Deploy).
+• عند استدعاء التوكين الجديد وتجربة الـ APIs، ستتم المعالجات البرمجية وتخزين سجلات تغيير الزيت وأرقام الطوارئ بسرعة صاروخية وبثبات لا متناهٍ للإنتاج الاحترافي.
+قم بتثبيت الـ PostgreSQL وتشغيل الهجرات الـ migrate الجديدة للنظامين. هل واجهتك أي مشكلة أثناء الاتصال بقاعدة البيانات أو توليد الجداول؟
