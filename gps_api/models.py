@@ -96,3 +96,15 @@ class OilChangeLog(models.Model):
 
     def __str__(self):
         return f"تغيير زيت لـ {self.device.name} عند {self.current_odometer} كم"
+
+
+
+class UserDeviceToken(models.Model):
+    # ربط الهاتف بالمستخدم المسجل في النظام
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="fcm_tokens")
+    # الرمز الفريد للجهاز القادم من الـ Firebase بمشروع الموبايل
+    fcm_token = models.CharField(max_length=500, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - Token"

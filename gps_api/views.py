@@ -640,4 +640,112 @@ class OilStatusAPI(APIView):
                 "warning_zone_triggered": needs_warning,
                 "overdue_triggered": is_overdue
             }
+            
         }, status=status.HTTP_200_OK)
+    
+
+import os
+import json
+from django.conf import settings
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import firebase_admin
+from firebase_admin import credentials, messaging
+from .models import GPSDevice
+
+
+BASE_DIR = settings.BASE_DIR
+cred_path = os.path.join(BASE_DIR, 'firebase-credentials.json')
+
+# تهيئة Firebase Admin SDK إذا لم تكن مهيأة مسبقاً
+if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_path)
+    firebase_admin.initialize_app(cred)
+
+@csrf_exempt
+def traccar_webhook(request):
+    if request.method == 'POST':
+        try:
+            # استقبال البيانات القادمة من Traccar وتحويلها لـ JSON
+            data = json.loads(request.body.decode('utf-8'))
+            
+            # استخراج بيانات الحدث والموقع والجهاز من الجيسون المرسل بواسطة Traccar
+            event = data.get('event', {})
+            position = data.get('position', {})
+            traccar_device_info = data.get('device', {})
+            
+            traccar_id = event.get('deviceId') or traccar_device_info.get('id')
+            print('traccar_id',traccar_id)
+            event_type = event.get('type')
+            
+            if not traccar_id:
+                return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
+            
+            # البحث عن الجهاز في قاعدة بيانات Django عبر traccar_id المربوط مع المودل الخاص بك
+            try:
+                device = GPSDevice.objects.get(traccar_id=traccar_id)
+                user = device.user
+            except GPSDevice.DoesNotExist:
+                return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
+            
+            # تحديد نص وعنوان التنبيه بناءً على نوع الحدث القادم من Traccar
+            title = f"تنبيه من جهازك: {device.name}"
+            body = "تنبيه جديد من نظام التتبع."
+            
+            # 1. حالة تجاوز السرعة المحددة
+            if event_type == "deviceOverspeed" or event_type == "speedLimitExceeded":
+                speed_kph = round(position.get('speed', 0) * 1.852, 1) # تحويل السرعة من عقدة (Knots) إلى كم/ساعة إذا لزم الأمر
+                body = f"تنبيه! تجاوزت السيارة السرعة المحددة. السرعة الحالية: {speed_kph} كم/س."
+            
+            # 2. حالة النطاق الجغرافي (Geofencing)
+            elif event_type == "geofenceEnter":
+                body = "دخلت السيارة النطاق الجغرافي المحدد لها."
+            elif event_type == "geofenceExit":
+                body = f"تحذير! خرجت السيارة {device.name} عن النطاق الجغرافي المسموح به."
+                
+            # 3. حالة الاهتزاز أو التلاعب (محاولة السرقة أو تحريك المستشعر)
+            elif event_type == "alarm":
+                alarm_type = event.get('attributes', {}).get('alarm', '') or position.get('attributes', {}).get('alarm', '')
+                
+                if alarm_type == "vibration":
+                    body = "تحذير! تم رصد اهتزاز في السيارة (احتمال محاولة سرقة)."
+                elif alarm_type == "tampering":
+                    body = "تحذير! هناك محاولة تلاعب بجهاز التتبع أو فصله."
+                elif alarm_type == "sos":
+                    body = "تنبيه طوارئ (SOS) تم تفعيله من داخل المركبة!"
+                else:
+                    body = f"تنبيه إنذار من الجهاز: {alarm_type if alarm_type else 'غير محدد'}"
+            
+            else:
+                # إذا كان الحدث غير مخصص، يمكنك تجاهله أو إرساله كتنبيه عام
+                return JsonResponse({'status': 'ignored', 'message': f'Event type {event_type} not handled'}, status=200)
+
+            # إرسال التنبيه عبر Firebase FCM إلى موضوع (Topic) مخصص للمستخدم لحل مشكلة تعدد الأجهزة والتوكنات
+            # يمكن للاستخدام في التطبيق أن يشترك المستخدم في موضوع يحمل اسمه أو معرّفه الفريد: "user_USERID"
+            topic_name = f"user_{user.id}"
+            
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title=title,
+                    body=body,
+                ),
+                data={
+                    "device_id": str(device.id),
+                    "traccar_id": str(traccar_id),
+                    "event_type": str(event_type),
+                    "latitude": str(position.get('latitude', '')),
+                    "longitude": str(position.get('longitude', ''))
+                },
+                topic=topic_name,
+            )
+            
+            # تنفيذ الإرسال الفعلي
+            response = messaging.send(message)
+            return JsonResponse({'status': 'success', 'message': 'Notification sent', 'fcm_id': response}, status=200)
+            
+        except json.JSONDecodeError:
+            return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+            
+    return JsonResponse({'status': 'error', 'message': 'Only POST method is allowed'}, status=405)

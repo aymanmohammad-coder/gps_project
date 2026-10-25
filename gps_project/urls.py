@@ -4,7 +4,7 @@ from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
-
+from gps_api.views import  traccar_webhook 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -18,6 +18,8 @@ urlpatterns = [
     path('api/gps/emergency-numbers/', EmergencyNumbersAPI.as_view(), name='emergency-numbers-crud'),
     path('api/gps/oil/change/', OilChangeRecordAPI.as_view(), name='record-oil-change'),
     path('api/gps/oil/status/', OilStatusAPI.as_view(), name='get-oil-status'),
+
+    path('api/traccar/webhook/',traccar_webhook, name='traccar_webhook'),
 
     
 ]

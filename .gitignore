@@ -1,1 +1,5 @@
-"__pycache__/\n*.pyc\ndb.sqlite3\n.venv/" 
+__pycache__/
+*.pyc
+db.sqlite3
+.venv/
+firebase-credentials.json
