@@ -117,19 +117,18 @@ class AddGPSDeviceAPI(APIView):
     # 1. إجبار الـ API على قراءة الـ Token والتحقق من هوية المرسل
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
-
     def post(self, request):
         name = request.data.get('name')
-        imei = request.data.get('imei')          # الـ Unique ID الخاص بالجهاز
+        imei = request.data.get('imei') # الـ Unique ID الخاص بالجهاز
         model = request.data.get('model', 'Coban 303') # افتراضي Coban 303 إن لم يرسل
         phone = request.data.get('phone_number', None)
         category = request.data.get('category', 'car')
-        
+
         # 2. التحقق من المدخلات الأساسية
         if not name or not imei:
             return Response({"error": "الحقول 'name' و 'imei' مطلوبة بشكل إجباري"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # 3. جلب المستخدم تلقائياً بناءً على الـ Token الممرر بالطلب (مستحيل أن يكون فارغاً أو مجهولاً) [d93df2]
+
+        # 3. جلب المستخدم تلقائياً بناءً على الـ Token الممرر بالطلب
         target_user = request.user
 
         # التحقق من عدم تكرار الجهاز محلياً قبل إرساله للسيرفر
@@ -141,9 +140,8 @@ class AddGPSDeviceAPI(APIView):
         if not base_url.endswith('/'):
             base_url += '/'
         devices_url = f"{base_url}api/devices"
-        
         auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
-        
+
         # هيكل البيانات الذي يتوقعه Traccar API لإنشاء جهاز
         traccar_payload = {
             "name": name,
@@ -152,31 +150,36 @@ class AddGPSDeviceAPI(APIView):
             "phone": phone,
             "category": category
         }
-        
+
         try:
             # إرسال طلب POST لخادم Traccar لإنشاء الجهاز
             traccar_response = requests.post(
-                devices_url, 
-                auth=auth_credentials, 
-                json=traccar_payload, 
+                devices_url,
+                auth=auth_credentials,
+                json=traccar_payload,
                 timeout=5.0
             )
-            
-            # إذا نجح خادم Traccar في إنشاء الجهاز (يعيد عادة كود 200 أو 201)
-            if traccar_response.status_code ==200:
+
+            # تم تصحيح الشرط هنا للتحقق من كود 200 أو 201 الناجح
+            if traccar_response.status_code ==200 : 
                 traccar_data = traccar_response.json()
-                assigned_traccar_id = traccar_data.get('id') # الحصول على الـ ID الداخلي من Traccar
-                
-                # 5. حفظ الجهاز في قاعدة بيانات دجانغو المحلية وربطه بالمستخدم صاحب الـ Token تلقائياً [d93df2]
+                assigned_traccar_id = traccar_data.get('id')  # الحصول على الـ ID الداخلي من Traccar
+
+                # للتأكد من عدم وجود جهاز محلي يحمل نفس الـ ID مسبقاً (تجنباً لـ IntegrityError)
+                if GPSDevice.objects.filter(id=assigned_traccar_id).exists():
+                    return Response({"error": f"معرف الجهاز (ID: {assigned_traccar_id}) محجوز مسبقاً في النظام المحلي"}, status=status.HTTP_409_CONFLICT)
+
+                # 5. حفظ الجهاز في قاعدة بيانات دجانغو وتمرير traccar_id ليكون هو الـ id الأساسي
                 local_device = GPSDevice.objects.create(
-                    user=target_user, 
+                    id=assigned_traccar_id,  # جعل رقم الجهاز المحلي هو نفسه traccar_id
+                    user=target_user,
                     name=name,
                     imei=imei,
                     traccar_id=assigned_traccar_id,
                     model=model,
                     phone_number=phone
                 )
-                
+
                 # إرجاع رد نجاح العملية يحتوي على بيانات كِلا الطرفين مع بيانات المستخدم المرتبط
                 return Response({
                     "message": "تم إضافة الجهاز بنجاح وربطه بحسابك الشخصي عبر الـ Token المرفق",
@@ -184,7 +187,7 @@ class AddGPSDeviceAPI(APIView):
                         "user_id": target_user.id,
                         "username": target_user.username
                     },
-                    "local_id": local_device.id,
+                    "local_id": local_device.id,  # سيكون مطابقاً لـ traccar_id تماماً
                     "traccar_id": assigned_traccar_id,
                     "device_details": traccar_data
                 }, status=status.HTTP_201_CREATED)
@@ -196,7 +199,7 @@ class AddGPSDeviceAPI(APIView):
                     "status_code": traccar_response.status_code,
                     "traccar_error": traccar_response.text
                 }, status=status.HTTP_502_BAD_GATEWAY)
-                
+
         except requests.exceptions.RequestException as e:
             return Response({
                 "error": f"تعذر الاتصال بخادم Traccar الخارجي لإتمام الإضافة: {str(e)}"

@@ -42,7 +42,7 @@ INSTALLED_APPS = [
     'gps_api',
 ]
 
-TRACCAR_SERVER_URL = "http://56.228.36.187:8082/"     
+TRACCAR_SERVER_URL = "http://16.192.203.80:8082/"     
 TRACCAR_USER = "ayman.mohammad@gmail.com"
 TRACCAR_PASSWORD = "ayman@973"
 MIDDLEWARE = [
