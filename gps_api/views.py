@@ -1104,7 +1104,7 @@ class SyncTraccarTripsView(APIView):
         to_time = end_period.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         # 3. بناء الرابط الأساسي وإعداد المعاملات بشكل مستقل (Query Parameters)
-        base_url = settings.TRACCAR_URL.rstrip('/')
+        base_url = settings.TRACCAR_SERVER_URL.rstrip('/')
         endpoint = f"{base_url}/api/reports/trips"
         
         # تمرير المعاملات كمفاتيح داخل قاموس يمنع تماماً مشاكل الترميز ورموز HTML الزائدة مثل &amp;
