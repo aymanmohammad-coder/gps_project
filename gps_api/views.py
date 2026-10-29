@@ -1092,7 +1092,7 @@ class SyncTraccarTripsView(APIView):
         to_time = end_period.strftime('%Y-%m-%dT%H:%M:%SZ')
 
         # 3. إعداد الاتصال بـ Traccar API لطلب تقرير الرحلات (Trips Report)
-        endpoint = f"{settings.TRACCAR_URL}/api/reports/trips"
+        endpoint = f"{settings.TRACCAR_SERVER_URL}/api/reports/trips"
         params = {
             'deviceId': device.traccar_id,
             'from': from_time,
