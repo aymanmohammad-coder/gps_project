@@ -1060,75 +1060,102 @@ class VerifyPinCodeView(APIView):
                 "error": "رمز الـ PIN غير صحيح، تم رفض العملية"
             }, status=status.HTTP_401_UNAUTHORIZED)
 
-
 import requests
 import hashlib
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
 from django.conf import settings
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
-from .models import GPSDevice, GPSTrip
+from .models import GPSDevice, GPSTrip  # تأكد من مطابقة مسار الاستيراد لمجلد تطبيقك
 
+# -------------------------------------------------------------
+# 1. API المزامنة والسحب التلقائي من Traccar (POST)
+# -------------------------------------------------------------
 class SyncTraccarTripsView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request, device_id):
-        # 1. التحقق من وجود الجهاز وصلاحية المستخدم
+        # 1. التحقق من وجود الجهاز وصلاحية المستخدم الحالي لحماية الخصوصية
         try:
             device = GPSDevice.objects.get(id=device_id, user=request.user)
         except GPSDevice.DoesNotExist:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالوصول إليه."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         if not device.traccar_id:
-            return Response({"error": "هذا الجهاز غير مربوط بنظام Traccar (traccar_id مفقود)."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "هذا الجهاز غير مربوط بنظام Traccar (حقل traccar_id مفقود)."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # 2. تحديد الفاصل الزمني لجلب الرحلات من Traccar (مثال: آخر 7 أيام)
-        # يمكنك جعلها اختيارية واستقبالها من الـ query_params إذا أردت
+        # 2. تحديد النطاق الزمني لجلب الرحلات (مثال: آخر 7 أيام)
         end_period = timezone.now()
         start_period = end_period - timezone.timedelta(days=7)
         
-        # تحويل الوقت للصيغة القياسية التي يفهمها Traccar (ISO 8601 UTC)
+        # صياغة التوقيت بالشكل القياسي النظيف الذي يفهمه سيرفر Traccar (ISO 8601 UTC)
         from_time = start_period.strftime('%Y-%m-%dT%H:%M:%SZ')
         to_time = end_period.strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        # 3. إعداد الاتصال بـ Traccar API لطلب تقرير الرحلات (Trips Report)
-        endpoint = f"{settings.TRACCAR_SERVER_URL}/api/reports/trips"
-        params = {
-            'deviceId': device.traccar_id,
+        # 3. بناء الرابط الأساسي وإعداد المعاملات بشكل مستقل (Query Parameters)
+        base_url = settings.TRACCAR_URL.rstrip('/')
+        endpoint = f"{base_url}/api/reports/trips"
+        
+        # تمرير المعاملات كمفاتيح داخل قاموس يمنع تماماً مشاكل الترميز ورموز HTML الزائدة مثل &amp;
+        query_params = {
+            'deviceId': int(device.traccar_id),
             'from': from_time,
             'to': to_time
         }
+        
         auth = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
-        headers = {'Accept': 'application/json'}
+        headers = {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+        }
 
         try:
-            response = requests.get(endpoint, params=params, auth=auth, headers=headers, timeout=15)
-            if response.status_code != 200:
-                return Response({"error": f"فشل الاتصال بسيرفر Traccar: {response.text}"}, status=status.HTTP_502_BAD_GATEWAY)
+            # إرسال الطلب مع تمرير المعاملات عبر الدالة params لتركيب الرابط برمز & الأصلي
+            response = requests.get(endpoint, params=query_params, auth=auth, headers=headers, timeout=15)
             
-            traccar_trips = response.json() # البيانات المرجعة عبارة عن قائمة من الرحلات
+            if response.status_code != 200:
+                return Response(
+                    {"error": f"فشل الاتصال بسيرفر Traccar: {response.text}"}, 
+                    status=status.HTTP_502_BAD_GATEWAY
+                )
+            
+            traccar_trips = response.json()
+            
         except requests.exceptions.RequestException as e:
-            return Response({"error": f"خطأ أثناء الاتصال بالشبكة: {str(e)}"}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response(
+                {"error": f"خطأ أثناء الاتصال بالشبكة مع سيرفر Traccar: {str(e)}"}, 
+                status=status.HTTP_502_BAD_GATEWAY
+            )
 
-        # 4. معالجة البيانات القادمة وحفظها تلقائياً مع تجنب التكرار
+        # 4. معالجة الرحلات القادمة وحفظها تلقائياً في قاعدة البيانات مع منع التكرار
         saved_count = 0
         for trip_data in traccar_trips:
-            # صياغة أوقات البداية والنهاية
             s_time = parse_datetime(trip_data.get('startTime'))
             e_time = parse_datetime(trip_data.get('endTime'))
             
-            # توليد بصمة فريدة للرحلة لمنع تكرار الحفظ عند إعادة السحب
+            # توليد بصمة فريدة (Unique MD5 Hash) لكل رحلة لمنع تكرار السجلات عند إعادة المزامنة
             raw_sig = f"{device.traccar_id}_{trip_data.get('startTime')}_{trip_data.get('endTime')}"
             signature = hashlib.md5(raw_sig.encode('utf-8')).hexdigest()
 
-            # التأكد أن الرحلة لم تحفظ مسبقاً، إذا كانت موجودة يتم تخطيها
+            # التحقق إذا كانت الرحلة مسجلة مسبقاً يتم تخطيها فوراً
             if GPSTrip.objects.filter(trip_signature=signature).exists():
                 continue
 
-            # تحويل المسافة من متر (وحدة Traccar القياسية) إلى كيلومتر
+            # تحويل المسافة من متر (وحدة Traccar الافتراضية) إلى كيلومتر
             distance_km = round(trip_data.get('distance', 0) / 1000.0, 2)
 
-            # الحفظ التلقائي في قاعدة البيانات
+            # تسجيل الرحلة تلقائياً في قاعدة البيانات
             GPSTrip.objects.create(
                 device=device,
                 start_lat=trip_data.get('startLat'),
@@ -1144,40 +1171,50 @@ class SyncTraccarTripsView(APIView):
             saved_count += 1
 
         return Response({
-            "message": "تمت مزامنة وسحب الرحلات من Traccar بنجاح",
-            "total_fetched": len(traccar_trips),
-            "new_saved": saved_count
+            "status": "success",
+            "message": "تمت مزامنة وسحب الرحلات من Traccar بنجاح.",
+            "total_fetched_from_traccar": len(traccar_trips),
+            "new_saved_trips": saved_count
         }, status=status.HTTP_200_OK)
 
 
 # -------------------------------------------------------------
-# 2. API عرض سجل الحركة / الرحلات لجهاز محدد (GET)
+# 2. API عرض سجل الحركة / الرحلات المخزنة لجهاز محدد (GET)
 # -------------------------------------------------------------
 class GPSTripListView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, device_id):
-        # التأكد من ملكية الجهاز أولاً لخصوصية البيانات
+        # 1. التأكد أولاً من ملكية الجهاز لحماية خصوصية بيانات المستخدمين
         try:
             device = GPSDevice.objects.get(id=device_id, user=request.user)
         except GPSDevice.DoesNotExist:
-            return Response({"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه."}, status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
 
-        # جلب رحلات هذا الجهاز وترتيبها من الأحدث للأقدم
+        # 2. جلب جميع الرحلات الخاصة بهذا الجهاز وترتيبها من الأحدث للأقدم
         trips = GPSTrip.objects.filter(device=device).order_by('-start_time')
         
-        # صياغة البيانات المسترجعة يدويًا بشكل منسق للتطبيق
+        # 3. صياغة المخرجات بشكل مخصص ومنظم ومناسب لواجهات التطبيق
         trips_data = []
         for trip in trips:
             trips_data.append({
                 "id": trip.id,
-                "start_point": trip.start_point,
-                "end_point": trip.end_point,
+                "start_location": {"lat": trip.start_lat, "lon": trip.start_lon},
+                "end_location": {"lat": trip.end_lat, "lon": trip.end_lon},
                 "distance_km": trip.distance,
+                "duration_seconds": trip.duration,
+                "duration_minutes": round(trip.duration / 60, 2), # تحويل المدة لدقائق لسهولة القراءة
                 "start_time": trip.start_time.strftime('%Y-%m-%d %H:%M:%S'),
-                "end_time": trip.end_time.strftime('%Y-%m-%d %H:%M:%S'),
-                "duration_minutes": round((trip.end_time - trip.start_time).total_seconds() / 60, 2) # حساب مدة الرحلة تلقائياً بالدقائق
+                "end_time": trip.end_time.strftime('%Y-%m-%d %H:%M:%S')
             })
 
-        return Response({"device_id": device_id, "trips": trips_data}, status=status.HTTP_200_OK)
+        return Response({
+            "device_id": device.id,
+            "device_name": device.name,
+            "total_trips_in_db": len(trips_data),
+            "trips": trips_data
+        }, status=status.HTTP_200_OK)
