@@ -139,3 +139,29 @@ class GPSAlarmLog(models.Model):
 
     def __str__(self):
         return f"{self.device.name} - {self.get_event_type_display()} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+
+
+class GPSTrip(models.Model):
+    device = models.ForeignKey(GPSDevice, on_delete=models.CASCADE, related_name='trips')
+    
+    # تفاصيل النقطة الأولى والأخيرة من Traccar
+    start_lat = models.FloatField()
+    start_lon = models.FloatField()
+    end_lat = models.FloatField()
+    end_lon = models.FloatField()
+    
+    # التوقيت والمسافة المحسوبة من سيرفر Traccar
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    distance = models.FloatField(help_text="المسافة بالكيلومتر")
+    duration = models.IntegerField(help_text="مدة الرحلة بالثواني")
+    
+    # حقل لمنع تكرار سحب نفس الرحلة من Traccar
+    # Traccar لا يملك ID ثابت للرحلة، لذا سنقوم بتركيب بصمة فريدة (unique hash) تجمع بين وقت البداية والنهاية والمعرف
+    trip_signature = models.CharField(max_length=100, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Trip for {self.device.name} [{self.distance} km]"

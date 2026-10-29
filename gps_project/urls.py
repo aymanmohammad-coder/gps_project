@@ -5,6 +5,7 @@ from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,E
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
 from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
+from gps_api.views import SyncTraccarTripsView, GPSTripListView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -26,7 +27,14 @@ urlpatterns = [
      path('api/gps/devices/<int:device_id>/logs/', GPSAlarmLogDeviceListView.as_view(), name='gps-device-alarm-logs'),
     path('api/gps/<int:pk>/set-pin/', CreateOrUpdatePinCodeView.as_view(), name='set-gps-pin'),
     path('api/gps/<int:pk>/verify-pin/', VerifyPinCodeView.as_view(), name='verify-gps-pin'),
-]
+
+# رابط المزامنة والسحب التلقائي (POST)
+    path('api/gps/devices/<int:device_id>/trips/sync/', SyncTraccarTripsView.as_view(), name='sync-traccar-trips'),
+    
+    # رابط العرض العادي للسجلات من قاعدة بياناتك (GET)
+    path('api/gps/devices/<int:device_id>/trips/', GPSTripListView.as_view(), name='gps-device-trips'),
+
+  ]    
 
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
