@@ -951,6 +951,57 @@ class GPSAlarmLogListView(APIView):
 
         return paginator.get_paginated_response(logs_data)
 
+
+
+
+class GPSAlarmLogDeviceListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # استقبال device_id كمعامل أساسي في الدالة
+    def get(self, request, device_id):
+        
+        # 1. التأكد أن الجهاز موجود ويخص المستخدم الحالي (حماية الخصوصية)
+        try:
+            device = GPSDevice.objects.get(id=device_id, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه"}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # 2. جلب السجلات الخاصة بهذا الجهاز المحدد
+        queryset = GPSAlarmLog.objects.filter(device=device)
+
+        # 3. إمكانية التصفية الاختيارية بحسب نوع الإنذار (sos, overspeed, geofence, vibration)
+        event_type = request.query_params.get('event_type')
+        if event_type:
+            queryset = queryset.filter(event_type=event_type)
+
+        # 4. تطبيق التصفيح (Pagination) على البيانات
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+
+        # 5. صياغة البيانات المرجعة يدويًا بشكل مخصص ومناسب للتطبيق
+        logs_data = []
+        for log in page:
+            logs_data.append({
+                "id": log.id,
+                "device_id": log.device.id,
+                "device_name": log.device.name,
+                "event_type": log.event_type,
+                "event_type_display": log.get_event_type_display(),
+                "title": log.title,
+                "body": log.body,
+                "called_sos_number": log.called_sos_number,
+                "current_speed": log.current_speed,
+                "created_at": log.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        return paginator.get_paginated_response(logs_data)
+
+
+
 from django.contrib.auth.hashers import make_password, check_password
 from .models import GPSDevice
 

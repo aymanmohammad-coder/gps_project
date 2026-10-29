@@ -4,7 +4,7 @@ from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
-from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView
+from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -23,10 +23,10 @@ urlpatterns = [
     path('api/gps/<int:pk>/toggle-mic/', ToggleMicView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/set-sos/', SetSosNumbersView.as_view(), name='set-sos'),
     path('api/gps/alarm-logs/', GPSAlarmLogListView.as_view(), name='gps-alarm-logs'),
+     path('api/gps/devices/<int:device_id>/logs/', GPSAlarmLogDeviceListView.as_view(), name='gps-device-alarm-logs'),
     path('api/gps/<int:pk>/set-pin/', CreateOrUpdatePinCodeView.as_view(), name='set-gps-pin'),
     path('api/gps/<int:pk>/verify-pin/', VerifyPinCodeView.as_view(), name='verify-gps-pin'),
 ]
 
-    
-]
+    #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
