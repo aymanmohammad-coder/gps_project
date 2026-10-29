@@ -2,9 +2,9 @@ from django.contrib import admin
 from django.urls import path
 from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
-from gps_api.views import OilChangeRecordAPI, OilStatusAPI
+from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
-from gps_api.views import  traccar_webhook 
+from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -20,6 +20,13 @@ urlpatterns = [
     path('api/gps/oil/status/', OilStatusAPI.as_view(), name='get-oil-status'),
 
     path('api/traccar/webhook/',traccar_webhook, name='traccar_webhook'),
+    path('api/gps/<int:pk>/toggle-mic/', ToggleMicView.as_view(), name='toggle-mic'),
+    path('api/gps/<int:pk>/set-sos/', SetSosNumbersView.as_view(), name='set-sos'),
+    path('api/gps/alarm-logs/', GPSAlarmLogListView.as_view(), name='gps-alarm-logs'),
+    path('api/gps/<int:pk>/set-pin/', CreateOrUpdatePinCodeView.as_view(), name='set-gps-pin'),
+    path('api/gps/<int:pk>/verify-pin/', VerifyPinCodeView.as_view(), name='verify-gps-pin'),
+]
 
     
 ]
+#   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc

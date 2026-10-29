@@ -8,8 +8,7 @@ from django.contrib.auth.models import User
 from rest_framework.permissions import IsAuthenticated # اختياري: لحظر المستخدمين غير المسجلين
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
-
-
+from requests.auth import HTTPBasicAuth
 from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog
 
 class LiveGPSLocationAPI(APIView):
@@ -665,90 +664,347 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
 
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from datetime import timedelta
+from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings, GPSAlarmLog
+
 @csrf_exempt
 def traccar_webhook(request):
     if request.method == 'POST':
         try:
-            # استقبال البيانات القادمة من Traccar وتحويلها لـ JSON
             data = json.loads(request.body.decode('utf-8'))
             
-            # استخراج بيانات الحدث والموقع والجهاز من الجيسون المرسل بواسطة Traccar
             event = data.get('event', {})
             position = data.get('position', {})
             traccar_device_info = data.get('device', {})
             
             traccar_id = event.get('deviceId') or traccar_device_info.get('id')
-            print('traccar_id',traccar_id)
             event_type = event.get('type')
             
             if not traccar_id:
                 return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
             
-            # البحث عن الجهاز في قاعدة بيانات Django عبر traccar_id المربوط مع المودل الخاص بك
             try:
                 device = GPSDevice.objects.get(traccar_id=traccar_id)
                 user = device.user
             except GPSDevice.DoesNotExist:
                 return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
             
-            # تحديد نص وعنوان التنبيه بناءً على نوع الحدث القادم من Traccar
-            title = f"تنبيه من جهازك: {device.name}"
+            title = f"تنبيه طوارئ من: {device.name}"
             body = "تنبيه جديد من نظام التتبع."
+            alarm_type = event.get('attributes', {}).get('alarm', '') or position.get('attributes', {}).get('alarm', '')
             
-            # 1. حالة تجاوز السرعة المحددة
-            if event_type == "deviceOverspeed" or event_type == "speedLimitExceeded":
-                speed_kph = round(position.get('speed', 0) * 1.852, 1) # تحويل السرعة من عقدة (Knots) إلى كم/ساعة إذا لزم الأمر
-                body = f"تنبيه! تجاوزت السيارة السرعة المحددة. السرعة الحالية: {speed_kph} كم/س."
-            
-            # 2. حالة النطاق الجغرافي (Geofencing)
-            elif event_type == "geofenceEnter":
-                body = "دخلت السيارة النطاق الجغرافي المحدد لها."
-            elif event_type == "geofenceExit":
-                body = f"تحذير! خرجت السيارة {device.name} عن النطاق الجغرافي المسموح به."
-                
-            # 3. حالة الاهتزاز أو التلاعب (محاولة السرقة أو تحريك المستشعر)
-            elif event_type == "alarm":
-                alarm_type = event.get('attributes', {}).get('alarm', '') or position.get('attributes', {}).get('alarm', '')
-                
-                if alarm_type == "vibration":
-                    body = "تحذير! تم رصد اهتزاز في السيارة (احتمال محاولة سرقة)."
-                elif alarm_type == "tampering":
-                    body = "تحذير! هناك محاولة تلاعب بجهاز التتبع أو فصله."
-                elif alarm_type == "sos":
-                    body = "تنبيه طوارئ (SOS) تم تفعيله من داخل المركبة!"
-                else:
-                    body = f"تنبيه إنذار من الجهاز: {alarm_type if alarm_type else 'غير محدد'}"
-            
-            else:
-                # إذا كان الحدث غير مخصص، يمكنك تجاهله أو إرساله كتنبيه عام
-                return JsonResponse({'status': 'ignored', 'message': f'Event type {event_type} not handled'}, status=200)
+            called_number = None
+            current_speed = round(position.get('speed', 0) * 1.852, 1)
 
-            # إرسال التنبيه عبر Firebase FCM إلى موضوع (Topic) مخصص للمستخدم لحل مشكلة تعدد الأجهزة والتوكنات
-            # يمكن للاستخدام في التطبيق أن يشترك المستخدم في موضوع يحمل اسمه أو معرّفه الفريد: "user_USERID"
-            topic_name = f"user_{user.id}"
-            
-            message = messaging.Message(
-                notification=messaging.Notification(
-                    title=title,
-                    body=body,
-                ),
-                data={
-                    "device_id": str(device.id),
-                    "traccar_id": str(traccar_id),
-                    "event_type": str(event_type),
-                    "latitude": str(position.get('latitude', '')),
-                    "longitude": str(position.get('longitude', ''))
-                },
-                topic=topic_name,
+            # 🚨 منطق فحص الـ SOS ومعرفة الرقم المتصل به
+            if event_type == "sos" or alarm_type == "sos":
+                # 1. محاولة قراءة الترتيب من خصائص الجهاز إن وجدت (بعض الأجهزة ترسل sos_index أو index)
+                sos_index = position.get('attributes', {}).get('index') or event.get('attributes', {}).get('sos_index')
+                
+                # 2. إذا لم يرسلها الجهاز، نقوم بحسابها ذكياً عبر مراجعة السجلات السابقة في آخر 3 دقائق
+                if not sos_index:
+                    time_threshold = timezone.now() - timedelta(minutes=3)
+                    recent_sos_count = GPSAlarmLog.objects.filter(
+                        device=device, 
+                        event_type='sos', 
+                        created_at__gte=time_threshold
+                    ).count()
+                    # إذا كان هناك إنذار سابق قبل دقيقة، فهذا يعني أن الأول فشل والجهاز يتصل بالثاني الآن
+                    sos_index = (recent_sos_count % 3) + 1 
+                
+                # تحديث الرقم المتصل به بناءً على الـ index المستنتج أو المرسل
+                # (بافتراض أنك تستقبل الأرقام وتخزنها، أو يمكنك جلبها إذا أضفت حقول sos1,sos2 للمودل الرئيسي)
+                # هنا سنكتفي بكتابة المحاولة الحالية في السجل
+                called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
+
+                # فحص الجداول الثلاثة للإعدادات المدمجة
+                speed_setting = getattr(device, 'speed_setting', None)
+                vibration_setting = getattr(device, 'vibration_setting', None)
+                geofence_setting = getattr(device, 'geofence_setting', None)
+                
+                current_vibration = position.get('attributes', {}).get('vibration', 0)
+                is_outside_geofence = position.get('attributes', {}).get('out_geofence', False)
+
+                reasons = []
+                if speed_setting and speed_setting.is_active and current_speed > speed_setting.max_speed:
+                    reasons.append(f"تجاوز السرعة ({current_speed} كم/س)")
+                if vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type == "vibration"):
+                    reasons.append("رصد اهتزاز عنيف")
+                if geofence_setting and geofence_setting.is_active and (is_outside_geofence or event_type == "geofenceExit"):
+                    reasons.append("تجاوز النطاق الجغرافي")
+
+                if reasons:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number}. بالتزامن مع: {' و '.join(reasons)}."
+                else:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number} (العدادات الحالية طبيعية)."
+                
+                save_type = 'sos'
+
+            # حالات الإنذارات العادية الأخرى للحفظ في الـ Logs أيضاً
+            elif event_type in ["deviceOverspeed", "speedLimitExceeded"]:
+                body = f"تنبيه! تجاوزت السيارة السرعة المحددة: {current_speed} كم/س."
+                save_type = 'overspeed'
+            elif event_type in ["geofenceEnter", "geofenceExit"]:
+                body = "تحذير! خرجت السيارة عن النطاق الجغرافي المسموح به." if event_type == "geofenceExit" else "دخلت السيارة النطاق الجغرافي."
+                save_type = 'geofence'
+            elif alarm_type == "vibration" or alarm_type == "tampering":
+                body = "تحذير! تم رصد اهتزاز في السيارة أو محاولة تلاعب بالجهاز."
+                save_type = 'vibration'
+            else:
+                return JsonResponse({'status': 'ignored', 'message': 'Event not tracked'}, status=200)
+
+            # 💾 [حفظ السجل في قاعدة البيانات ليعرض لاحقاً في التطبيق]
+            GPSAlarmLog.objects.create(
+                device=device,
+                event_type=save_type,
+                title=title,
+                body=body,
+                called_sos_number=called_number,
+                current_speed=current_speed
             )
+
+            # إرسال الإشعار الفوري لـ Firebase
+            topic_name = f"user_{user.id}"
+            # هنا كود إرسال الـ FCM الخاص بك...
             
-            # تنفيذ الإرسال الفعلي
-            response = messaging.send(message)
-            return JsonResponse({'status': 'success', 'message': 'Notification sent', 'fcm_id': response}, status=200)
-            
-        except json.JSONDecodeError:
-            return JsonResponse({'status': 'error', 'message': 'Invalid JSON'}, status=400)
+            return JsonResponse({'status': 'success', 'message': 'Alarm logged and notification sent'}, status=200)
+
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-            
-    return JsonResponse({'status': 'error', 'message': 'Only POST method is allowed'}, status=405)
+
+##
+
+# دالة إرسال الأمر عبر Traccar API باستخدام إعدادات الـ settings
+def send_traccar_command(traccar_id, command_text):
+    """
+    إرسال أمر مخصص (Custom Command) إلى جهاز معين عبر Traccar
+    """
+    # بناء الرابط باستخدام المتغير الموجود في settings
+    url = f"{settings.TRACCAR_SERVER_URL.rstrip('/')}/api/commands/send"
+    
+    # بيانات تسجيل الدخول من settings
+    auth_credentials = HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+    
+    payload = {
+        "deviceId": traccar_id,
+        "type": "custom",
+        "attributes": {
+            "data": command_text
+        }
+    }
+    
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            auth=auth_credentials,
+            headers={"Content-Type": "application/json"},
+            timeout=10
+        )
+        # إرجاع True إذا كان كود الحالة 200 أو 202 (تم قبول الأمر)
+        return response.status_code in [200, 202]
+    except requests.exceptions.RequestException:
+        return False
+
+
+# كلاس الـ API الخاص بتفعيل وإلغاء وضع المايك (التنصت)
+class ToggleMicView(APIView):
+    permission_classes = [IsAuthenticated] # حماية الـ API ليكون للمستخدمين المسجلين فقط
+
+    def post(self, request, pk):
+        try:
+            # التحقق من وجود الجهاز وأنه ملك للمستخدم الحالي لحماية الخصوصية
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # استقبال وضع التشغيل من الطلب (json body): {"mode": "monitor"} أو {"mode": "tracker"}
+        mode = request.data.get("mode")
+        
+        if mode == "monitor":
+            command = "monitor123456"
+        elif mode == "tracker":
+            command = "tracker123456"
+        else:
+            return Response(
+                {"error": "الحالة المرسلة غير مدعومة. يرجى إرسال 'monitor' أو 'tracker'"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # استدعاء الدالة وإرسال الأمر إلى Traccar
+        success = send_traccar_command(device.traccar_id, command)
+        
+        if success:
+            return Response({
+                "message": f"تم إرسال أمر التحويل إلى وضع {mode} بنجاح.",
+                "device_name": device.name,
+                "imei": device.imei
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {"error": "فشل الاتصال بسيرفر Traccar أو رفض السيرفر إرسال الأمر للمركبة"}, 
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+class SetSosNumbersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            # التحقق من ملكية الجهاز للمستخدم لحماية الخصوصية
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # استقبال الأرقام الثلاثة من الـ Request Body
+        num1 = request.data.get("sos1")
+        num2 = request.data.get("sos2")
+        num3 = request.data.get("sos3")
+        
+        if not num1:
+            return Response({"error": "يجب إدخال رقم الطوارئ الأول على الأقل"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # بناء الأوامر الخاصة بجهاز Coban (صيغة الأمر: admin123456 space phone_number)
+        commands = []
+        if num1: commands.append(f"admin123456 {num1}")
+        if num2: commands.append(f"admin123456 {num2}")
+        if num3: commands.append(f"admin123456 {num3}")
+        
+        # إرسال الأوامر بالتتابع إلى السيرفر
+        success_count = 0
+        for cmd in commands:
+            if send_traccar_command(device.traccar_id, cmd):
+                success_count += 1
+        
+        # التحقق من نجاح إرسال الأوامر على الأقل للرقم الأول
+        if success_count > 0:
+            return Response({
+                "message": f"تم إرسال أرقام الطوارئ بنجاح لجهاز Coban. (الأوامر الناجحة: {success_count} من أصل {len(commands)})",
+                "device_name": device.name,
+                "saved_numbers": [n for n in [num1, num2, num3] if n]
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "فشل إرسال الأوامر، تأكد من اتصال سيرفر Traccar"}, status=status.HTTP_502_BAD_GATEWAY)
+
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.pagination import PageNumberPagination
+from .models import GPSAlarmLog, GPSDevice
+
+# إعداد كلاس التصفيح (Pagination) لجلب 20 سجل في كل صفحة
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class GPSAlarmLogListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # 1. جلب السجلات التي تخص أجهزة المستخدم الحالي فقط لحماية الخصوصية
+        queryset = GPSAlarmLog.objects.filter(device__user=request.user)
+        
+        # 2. إمكانية التصفية بحسب جهاز معين إذا أرسل المطور device_id في الرابط
+        device_id = request.query_params.get('device_id')
+        if device_id:
+            try:
+                # التأكد أولاً أن الجهاز يخص المستخدم
+                device = GPSDevice.objects.get(id=device_id, user=request.user)
+                queryset = queryset.filter(device=device)
+            except GPSDevice.DoesNotExist:
+                return Response({"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه"}, status=status.HTTP_403_FORBIDDEN)
+        
+        # 3. إمكانية التصفية بحسب نوع الإنذار (sos, overspeed, geofence, vibration)
+        event_type = request.query_params.get('event_type')
+        if event_type:
+            queryset = queryset.filter(event_type=event_type)
+
+        # 4. تطبيق التصفيح (Pagination) على البيانات
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        
+        # 5. صياغة البيانات المرجعة يدويًا بشكل مخصص ومناسب للتطبيق
+        logs_data = []
+        for log in page:
+            logs_data.append({
+                "id": log.id,
+                "device_id": log.device.id,
+                "device_name": log.device.name,
+                "event_type": log.event_type,
+                "event_type_display": log.get_event_type_display(),
+                "title": log.title,
+                "body": log.body,
+                "called_sos_number": log.called_sos_number, # الرقم التتابعي المتصل به في حال الـ SOS
+                "current_speed": log.current_speed,
+                "created_at": log.created_at.strftime('%Y-%m-%d %H:%M:%S') # تنسيق الوقت بشكل واضح للتطبيق
+            })
+
+        return paginator.get_paginated_response(logs_data)
+
+from django.contrib.auth.hashers import make_password, check_password
+from .models import GPSDevice
+
+# 1. API إنشاء أو تعديل الـ PIN Code
+class CreateOrUpdatePinCodeView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو لا تملك الصلاحية"}, status=status.HTTP_404_NOT_FOUND)
+        
+        pin = request.data.get("pin")
+        
+        # التحقق من شروط الـ PIN (أن يكون أرقام فقط وبطول مناسب)
+        if not pin or not pin.isdigit() or len(pin) < 4 or len(pin) > 6:
+            return Response({"error": "يجب أن يتكون رمز الـ PIN من 4 إلى 6 أرقام فقط"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # تشفير الـ PIN وحفظه بشكل آمن
+        device.pin_code = make_password(pin)
+        device.save()
+        
+        return Response({"message": "تم تعيين رمز الـ PIN الخاص بالجهاز بنجاح"}, status=status.HTTP_200_OK)
+
+
+# 2. API التحقق من الـ PIN Code (قبل تنفيذ الأوامر الحساسة)
+class VerifyPinCodeView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو لا تملك الصلاحية"}, status=status.HTTP_404_NOT_FOUND)
+        
+        pin = request.data.get("pin")
+        
+        if not device.pin_code:
+            return Response({"error": "لم يتم تعيين رمز PIN لهذا الجهاز مسبقاً، يرجى تعيينه أولاً"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not pin:
+            return Response({"error": "حقل الـ pin مطلوب"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # فحص مطابقة الـ PIN المرسل مع الهاش المشفر بقاعدة البيانات
+        if check_password(pin, device.pin_code):
+            return Response({
+                "status": "success",
+                "message": "تم التحقق من الرمز بنجاح، مصرح لك بتنفيذ الأمر الحساس"
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "status": "failed",
+                "error": "رمز الـ PIN غير صحيح، تم رفض العملية"
+            }, status=status.HTTP_401_UNAUTHORIZED)

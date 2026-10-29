@@ -13,6 +13,7 @@ class GPSDevice(models.Model):
     traccar_id = models.IntegerField(unique=True)  # لتخزين الـ ID القادم من Traccar
     model = models.CharField(max_length=50, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+    pin_code = models.CharField(max_length=128, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -108,3 +109,33 @@ class UserDeviceToken(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - Token"
+
+from django.db import models
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
+
+class GPSAlarmLog(models.Model):
+    ALARM_TYPES = [
+        ('sos', 'نداء استغاثة طوارئ'),
+        ('overspeed', 'تجاوز السرعة'),
+        ('geofence', 'خروج/دخول النطاق'),
+        ('vibration', 'اهتزاز أو تلاعب'),
+    ]
+
+    device = models.ForeignKey('GPSDevice', on_delete=models.CASCADE, related_name='alarm_logs')
+    event_type = models.CharField(max_length=50, choices=ALARM_TYPES)
+    title = models.CharField(max_length=200)
+    body = models.TextField()
+    
+    # حقول إضافية لتحديد حالة الـ SOS
+    called_sos_number = models.CharField(max_length=20, blank=True, null=True, help_text="رقم الطوارئ الذي تم الاتصال به حالياً")
+    current_speed = models.FloatField(default=0.0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at'] # عرض الأحدث أولاً
+
+    def __str__(self):
+        return f"{self.device.name} - {self.get_event_type_display()} - {self.created_at.strftime('%Y-%m-%d %H:%M')}"
