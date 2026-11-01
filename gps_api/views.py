@@ -1484,7 +1484,7 @@ def safe_engine_stop(request, device_id):
             }, status=400)
             
         # الخطوة 3: إرسال أمر الإيقاف لـ Traccar (إذا تحقق الشرط)
-        cmd_endpoint = f"{TRACCAR_URL}/api/commands/send"
+        cmd_endpoint = f"{settings.TRACCAR_SERVER_URL}/api/commands/send"
         
         # بناء جسم الأمر الموجه لجهاز PGC 303 (بروتوكول تراكير يستخدم الـ Relay)
         command_payload = {
@@ -1501,7 +1501,7 @@ def safe_engine_stop(request, device_id):
             timeout=5
         )
         
-        if cmd_response.status_code in:
+        if cmd_response.status_code ==200 :
             return JsonResponse({
                 "status": "success",
                 "message": f" Done! تم إرسال أمر إيقاف المحرك بنجاح. السرعة عند التنفيذ: {speed_kmh:.1f} كم/ساعة.",

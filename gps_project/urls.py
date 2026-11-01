@@ -5,7 +5,7 @@ from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,E
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
 from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
-from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,full_battery
+from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
