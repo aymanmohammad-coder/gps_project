@@ -5,7 +5,7 @@ from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,E
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
 from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
-from gps_api.views import SyncTraccarTripsView, GPSTripListView
+from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -33,8 +33,22 @@ urlpatterns = [
     
     # رابط العرض العادي للسجلات من قاعدة بياناتك (GET)
     path('api/gps/devices/<int:device_id>/trips/', GPSTripListView.as_view(), name='gps-device-trips'),
+    path('api/device/<int:device_id>/battery/', get_device_battery_status, name='device_battery'),
+    path('api/device/<int:device_id>/full_battery/', get_full_battery_status, name='device_full_battery'),
 
   ]    
 
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
+# git status
+# git add path/to/views.py path/to/urls.py
+# git commit -m "feat: add safe engine stop and battery alerts for Coban 303"
+#git push origin main
+
+#on Aws
+#git pull origin main
+#sudo systemctl restart gunicorn
+#sudo systemctl restart nginx
+
+
+

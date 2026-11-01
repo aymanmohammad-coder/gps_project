@@ -777,9 +777,104 @@ def traccar_webhook(request):
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 ##
+import requests
+from requests.auth import HTTPBasicAuth
+from django.conf import settings
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+
+def send_traccar_command(traccar_id, command_text):
+    url = f"{settings.TRACCAR_SERVER_URL.rstrip('/')}/api/commands/send"
+    auth_credentials = HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+    
+    payload = {
+        "deviceId": traccar_id,
+        "type": "custom",
+        "attributes": {"data": command_text}
+    }
+    try:
+        response = requests.post(url, json=payload, auth=auth_credentials, headers={"Content-Type": "application/json"}, timeout=10)
+        return response.status_code in [200, 202]
+    except requests.exceptions.RequestException:
+        return False
+
+# 🔥 الدالة السحرية للتحقق من حفظ الأرقام داخل سيرفر Traccar
+def verify_device_attributes_on_traccar(traccar_id, expected_numbers):
+    """
+    تقوم بجلب بيانات الجهاز الحالية من سيرفر Traccar وفحص الـ attributes 
+    للتأكد من أن الأرقام تم تسجيلها في ذاكرة الجهاز المتصل
+    """
+    url = f"{settings.TRACCAR_SERVER_URL.rstrip('/')}/api/devices?id={traccar_id}"
+    auth_credentials = HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+    
+    try:
+        response = requests.get(url, auth=auth_credentials, timeout=10)
+        if response.status_code == 200 and response.json():
+            device_data = response.json()[0]
+            # جلب السمات المرتدة من نظام قراءة الـ gps103 الخاص بـ Coban
+            attributes = device_data.get("attributes", {})
+            
+            # تحويل كافة قيم الـ attributes إلى نصوص لتسهيل البحث عن الأرقام بداخلها
+            attributes_string = str(attributes).replace(" ", "")
+            
+            verified_numbers = []
+            for num in expected_numbers:
+                clean_num = ''.join(filter(str.isdigit, str(num)))
+                # التحقق مما إذا كان الرقم (سواء بالصيغة المحلية أو الدولية) قد ظهر في باكت البيانات
+                if clean_num in attributes_string or clean_num[-9:] in attributes_string:
+                    verified_numbers.append(num)
+            
+            return verified_numbers
+    except Exception:
+        return []
+    return []
+#ok
+class SetSosNumbersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, status=status.HTTP_404_NOT_FOUND)
+        
+        # نأخذ الأرقام كما هي مدخلة من المستخدم (يفضل إدخالها بالصيغة المحلية 0933...)
+        num1 = request.data.get("sos1")
+        num2 = request.data.get("sos2")
+        num3 = request.data.get("sos3")
+        
+        raw_numbers = [n for n in [num1, num2, num3] if n]
+        if not raw_numbers:
+            return Response({"error": "يجب إدخال رقم طوارئ واحد على الأقل"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # بناء الأوامر وإرسالها
+        commands = [f"admin123456 {num}" for num in raw_numbers]
+        success_sent_count = 0
+        for cmd in commands:
+            if send_traccar_command(device.traccar_id, cmd):
+                success_sent_count += 1
+                
+        if success_sent_count == 0:
+            return Response({"error": "فشل إرسال الأوامر بالكامل إلى سيرفر Traccar"}, status=status.HTTP_502_BAD_GATEWAY)
+            
+        # 🛡️ خطوة التحقق الحقيقية واللحظية برمجياً:
+        # نقوم بفحص ما إذا كان السيرفر قد التقط الأرقام المحدثة في معطيات باكت البيانات من الجهاز
+        saved_and_verified = verify_device_attributes_on_tracara(device.traccar_id, raw_numbers)
+        
+        # إذا تطابقت الأرقام، نؤكد للمستخدم الحفظ الحقيقي
+        return Response({
+            "message": "اكتملت عملية المعالجة.",
+            "device_name": device.name,
+            "commands_sent_successfully": f"{success_sent_count} من أصل {len(commands)}",
+            "saved_and_verified_inside_device": saved_and_verified,
+            "unverified_numbers": list(set(raw_numbers) - set(saved_and_verified))
+        }, status=status.HTTP_200_OK)
 
 # دالة إرسال الأمر عبر Traccar API باستخدام إعدادات الـ settings
-def send_traccar_command(traccar_id, command_text):
+#qq
+def send_traccar_command1(traccar_id, command_text):
     """
     إرسال أمر مخصص (Custom Command) إلى جهاز معين عبر Traccar
     """
@@ -852,7 +947,8 @@ class ToggleMicView(APIView):
                 {"error": "فشل الاتصال بسيرفر Traccar أو رفض السيرفر إرسال الأمر للمركبة"}, 
                 status=status.HTTP_502_BAD_GATEWAY
             )
-class SetSosNumbersView(APIView):
+        
+class SetSosNumbersView1(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
@@ -1218,3 +1314,122 @@ class GPSTripListView(APIView):
             "total_trips_in_db": len(trips_data),
             "trips": trips_data
         }, status=status.HTTP_200_OK)
+
+
+
+def get_full_battery_status(request, device_id):
+    """
+    جلب حالة بطارية السيارة وبطارية الجهاز الداخلية معاً
+    """
+    ##endpoint = f"{TRACCAR_URL}/api/positions"
+
+
+    endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+    params = {'deviceId': device_id}
+
+    try:
+        response = requests.get(
+            endpoint, 
+            params=params, 
+            auth=HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD),
+            headers={"Accept": "application/json"},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            positions = response.json()
+            if not positions:
+                return JsonResponse({"error": "No data found"}, status=404)
+            
+            latest_position = positions[-1]
+            attributes = latest_position.get('attributes', {})
+            
+            # 1. بطارية السيارة الخارجية (قيمة الجهد بالفولت مثل 12.6V أو 13.8V أثناء الشحن)
+            car_battery_voltage = attributes.get('power') 
+            
+            # 2. بطارية الجهاز الداخلية (نسبة مئوية)
+            device_battery_level = attributes.get('batteryLevel') or attributes.get('battery')
+            
+            # تحليل حالة بطارية السيارة بناءً على الفولت (للسيارات 12 فولت)
+            car_battery_status = "Unknown"
+            if car_battery_voltage:
+                if car_battery_voltage >= 13.2:
+                    car_battery_status = "Running / Charging" # السيارة تعمل والدينامو يشحن
+                elif 12.2 <= car_battery_voltage < 13.2:
+                    car_battery_status = "Good / Engine Off"   # السيارة مطفأة والبطارية ممتازة
+                elif 11.5 <= car_battery_voltage < 12.2:
+                    car_battery_status = "Low Battery"         # البطارية ضعيفة
+                else:
+                    car_battery_status = "Very Low / Dead"     # البطارية شبه ميتة أو الجهاز مفصول عن السيارة
+            
+            return JsonResponse({
+                "device_id": device_id,
+                "car_battery": {
+                    "voltage": car_battery_voltage,      # مثال: 12.6
+                    "status": car_battery_status         # حالة البطارية تحليلياً
+                },
+                "device_battery": {
+                    "level": device_battery_level        # مثال: 90 (%)
+                },
+                "ignition": attributes.get('ignition'),   # حالة المفتاح/المحرك (True/False)
+                "device_time": latest_position.get('deviceTime')
+            })
+            
+        else:
+            return JsonResponse({"error": f"Traccar error: {response.status_code}"}, status=response.status_code)
+            
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": f"Connection failed: {str(e)}"}, status=500)
+    
+import requests
+from django.http import JsonResponse
+from requests.auth import HTTPBasicAuth
+
+# إعدادات الاتصال بسيرفر Traccar
+
+def get_device_battery_status(request, device_id):
+    """
+    جلب حالة البطارية لجهاز معين باستخدام الـ ID الخاص به في Traccar
+    """
+    endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+    #endpoint = f"{TRACCAR_URL}/api/positions"
+    
+    # نطلب من التراكير جلب آخر موقع مسجل لهذا الجهاز بالتحديد
+    params = {
+        'deviceId': device_id,
+    }
+    
+    try:
+        response = requests.get(
+            endpoint, 
+            params=params, 
+            auth=HTTPBasicAuth(settings.TRACCAR_USER,settings.TRACCAR_PASSWORD),
+            headers={"Accept": "application/json"},
+            timeout=5
+        )
+        
+        if response.status_code == 200:
+            positions = response.json()
+            
+            if not positions:
+                return JsonResponse({"error": "No position data found for this device"}, status=404)
+            
+            # جلب آخر موقع مسجل (يكون عادة آخر عنصر في القائمة أو العنصر الوحيد حسب الطلب)
+            latest_position = positions[-1]
+            attributes = latest_position.get('attributes', {})
+            
+            # جهاز PGC 303 غالباً يرسل البطارية كنسبة مئوية (batteryLevel) أو كجهد كهربائي (battery)
+            battery_level = attributes.get('batteryLevel') or attributes.get('battery')
+            
+            return JsonResponse({
+                "device_id": device_id,
+                "battery": battery_level, # القيمة المرتجعة (مثال: 85 تعني 85%)
+                "device_time": latest_position.get('deviceTime'),
+                "valid": latest_position.get('valid')
+            })
+            
+        else:
+            return JsonResponse({"error": f"Traccar error: {response.status_code}"}, status=response.status_code)
+            
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": f"Connection failed: {str(e)}"}, status=500)
