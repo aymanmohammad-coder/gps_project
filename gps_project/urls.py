@@ -41,7 +41,7 @@ urlpatterns = [
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
-#  git add gps_api/views.py gps_project/urls.py
+#  git add gps_api/views.py gps_api/models.py gps_project/urls.py
 # git commit -m "feat: add safe engine stop and battery alerts for Coban 303"
 #git push origin main
 
@@ -49,6 +49,10 @@ urlpatterns = [
 #git pull origin main
 #sudo systemctl restart gunicorn
 #sudo systemctl restart nginx
+
+
+#add limted device 
+# add fcm 
 
 
 

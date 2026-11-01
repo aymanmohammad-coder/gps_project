@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated # اختياري: لحظ�
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from requests.auth import HTTPBasicAuth
-from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog
+from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken
 
 class LiveGPSLocationAPI(APIView):
     """
@@ -133,7 +133,7 @@ class AddGPSDeviceAPI(APIView):
         # التحقق من عدم تكرار الجهاز محلياً قبل إرساله للسيرفر
         if GPSDevice.objects.filter(imei=imei).exists():
             return Response({"error": "هذا الجهاز (IMEI) مضاف بالفعل في النظام المحلي"}, status=status.HTTP_400_BAD_REQUEST)
-
+        expiration_date = timezone.now() + timedelta(days=180)
         # 4. تجهيز البيانات والإعدادات لخادم Traccar
         base_url = settings.TRACCAR_SERVER_URL
         if not base_url.endswith('/'):
@@ -147,7 +147,9 @@ class AddGPSDeviceAPI(APIView):
             "uniqueId": imei,
             "model": model,
             "phone": phone,
-            "category": category
+            "category": category,
+             "expirationTime": expiration_date.isoformat()  # يدعمه سيرفر Traccar تلقائياً
+      
         }
 
         try:
@@ -176,7 +178,8 @@ class AddGPSDeviceAPI(APIView):
                     imei=imei,
                     traccar_id=assigned_traccar_id,
                     model=model,
-                    phone_number=phone
+                    phone_number=phone,
+                    expiration_date=expiration_date
                 )
 
                 # إرجاع رد نجاح العملية يحتوي على بيانات كِلا الطرفين مع بيانات المستخدم المرتبط
@@ -188,6 +191,8 @@ class AddGPSDeviceAPI(APIView):
                     },
                     "local_id": local_device.id,  # سيكون مطابقاً لـ traccar_id تماماً
                     "traccar_id": assigned_traccar_id,
+                    "expiration_date": local_device.expiration_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    
                     "device_details": traccar_data
                 }, status=status.HTTP_201_CREATED)
                 
@@ -237,6 +242,8 @@ class GetMyDevicesAPI(APIView):
                 "traccar_id": device.traccar_id,
                 "model": device.model,
                 "phone_number": device.phone_number,
+                "expiration_date":device.expiration_date,
+                "days_remaining": device.days_left,
                 "created_at": device.created_at.strftime('%Y-%m-%d %H:%M:%S')  # تنسيق الوقت المقروء
             })
             
@@ -284,6 +291,7 @@ class LoginAPI(APIView):
     def post(self, request):
         username = request.data.get('username')
         password = request.data.get('password')
+        fcm_token = request.data.get('fcm_token')
 
         if not username or not password:
             return Response({"error": "يرجى إدخال اسم المستخدم وكلمة المرور"}, status=status.HTTP_400_BAD_REQUEST)
@@ -294,6 +302,12 @@ class LoginAPI(APIView):
         if user is not None:
             # جلب أو إنشاء التوكين الخاص بهذا المستخدم
             token, _ = Token.objects.get_or_create(user=user)
+            if fcm_token:
+                # نستخدم update_or_create لضمان عدم تكرار التوكن وتحديثه إذا كان يخص مستخدم آخر أو نفس المستخدم
+                UserDeviceToken.objects.update_or_create(
+                    fcm_token=fcm_token,
+                    defaults={'user': user}
+                )
             return Response({
                 "message": "تم تسجيل الدخول بنجاح",
                 "uid":user.id,
@@ -664,6 +678,145 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
 
+
+import json
+import firebase_admin
+from firebase_admin import messaging
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+from django.utils import timezone
+from datetime import timedelta
+from .models import GPSDevice, GPSAlarmLog, UserDeviceToken # تأكد من استيراد الموديل المخصص للتوكنز
+
+# تأكد من تهيئة Firebase Admin في مكان ما عند إقلاع المشروع (مثال: apps.py أو settings.py)
+# if not firebase_admin._apps:
+#     firebase_admin.initialize_app()
+
+@csrf_exempt
+def traccar_webhook(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+            
+            event = data.get('event', {})
+            position = data.get('position', {})
+            traccar_device_info = data.get('device', {})
+            
+            traccar_id = event.get('deviceId') or traccar_device_info.get('id')
+            event_type = event.get('type')
+            
+            if not traccar_id:
+                return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
+            
+            try:
+                device = GPSDevice.objects.get(traccar_id=traccar_id)
+                user = device.user
+            except GPSDevice.DoesNotExist:
+                return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
+            
+            title = f"تنبيه طوارئ من: {device.name}"
+            body = "تنبيه جديد من نظام التتبع."
+            alarm_type = event.get('attributes', {}).get('alarm', '') or position.get('attributes', {}).get('alarm', '')
+            
+            called_number = None
+            current_speed = round(position.get('speed', 0) * 1.852, 1)
+
+            # 🚨 منطق فحص الـ SOS ومعرفة الرقم المتصل به
+            if event_type == "sos" or alarm_type == "sos":
+                sos_index = position.get('attributes', {}).get('index') or event.get('attributes', {}).get('sos_index')
+                
+                if not sos_index:
+                    time_threshold = timezone.now() - timedelta(minutes=3)
+                    recent_sos_count = GPSAlarmLog.objects.filter(
+                        device=device, 
+                        event_type='sos', 
+                        created_at__gte=time_threshold
+                    ).count()
+                    sos_index = (recent_sos_count % 3) + 1 
+                
+                called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
+
+                speed_setting = getattr(device, 'speed_setting', None)
+                vibration_setting = getattr(device, 'vibration_setting', None)
+                geofence_setting = getattr(device, 'geofence_setting', None)
+                
+                current_vibration = position.get('attributes', {}).get('vibration', 0)
+                is_outside_geofence = position.get('attributes', {}).get('out_geofence', False)
+
+                reasons = []
+                if speed_setting and speed_setting.is_active and current_speed > speed_setting.max_speed:
+                    reasons.append(f"تجاوز السرعة ({current_speed} كم/س)")
+                if vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type == "vibration"):
+                    reasons.append("رصد اهتزاز عنيف")
+                if geofence_setting and geofence_setting.is_active and (is_outside_geofence or event_type == "geofenceExit"):
+                    reasons.append("تجاوز النطاق الجغرافي")
+
+                if reasons:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number}. بالتزامن مع: {' و '.join(reasons)}."
+                else:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number} (العدادات الحالية طبيعية)."
+                
+                save_type = 'sos'
+
+            elif event_type in ["deviceOverspeed", "speedLimitExceeded"]:
+                body = f"تنبيه! تجاوزت السيارة السرعة المحددة: {current_speed} كم/س."
+                save_type = 'overspeed'
+            elif event_type in ["geofenceEnter", "geofenceExit"]:
+                body = "تحذير! خرجت السيارة عن النطاق الجغرافي المسموح به." if event_type == "geofenceExit" else "دخلت السيارة النطاق الجغرافي."
+                save_type = 'geofence'
+            elif alarm_type == "vibration" or alarm_type == "tampering":
+                body = "تحذير! تم رصد اهتزاز في السيارة أو محاولة تلاعب بالجهاز."
+                save_type = 'vibration'
+            else:
+                return JsonResponse({'status': 'ignored', 'message': 'Event not tracked'}, status=200)
+
+            # 💾 [حفظ السجل في قاعدة البيانات ليعرض لاحقاً في التطبيق]
+            GPSAlarmLog.objects.create(
+                device=device,
+                event_type=save_type,
+                title=title,
+                body=body,
+                called_sos_number=called_number,
+                current_speed=current_speed
+            )
+
+            # -----------------------------------------------------------
+            # 🚀 إرسال الإشعار الفوري لـ Firebase لكل أجهزة هذا المستخدم
+            # -----------------------------------------------------------
+            # جلب كل التوكنز النشطة للمستخدم بصيغة قائمة (List)
+            fcm_tokens = list(UserDeviceToken.objects.filter(user=user).values_list('fcm_token', flat=True))
+
+            if fcm_tokens:
+                # تجهيز رسالة Firebase الجماعية (Multicast)
+                message = messaging.MulticastMessage(
+                    notification=messaging.Notification(
+                        title=title,
+                        body=body,
+                    ),
+                    data={
+                        "device_id": str(device.id),
+                        "event_type": save_type,
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK" # مفيد لتطبيقات الموبايل عند الضغط
+                    },
+                    tokens=fcm_tokens,
+                )
+                # تنفيذ عملية الإرسال الفعلي
+                response = messaging.send_each_for_multicast(message)
+                
+                # إدارة التوكنز التالفة (اختياري لكن احترافي لحذف التوكنز التي انتهت صلاحيتها أو حذف المستخدم التطبيق)
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success:
+                            # إذا كان سبب الفشل أن التوكن غير صالح، نقوم بحذفه من قاعدة البيانات
+                            if resp.exception.code == 'invalid-argument' or 'not-registered' in str(resp.exception):
+                                bad_token = fcm_tokens[idx]
+                                UserDeviceToken.objects.filter(fcm_token=bad_token).delete()
+
+            return JsonResponse({'status': 'success', 'message': 'Alarm logged and notification sent'}, status=200)
+
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
 import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -672,7 +825,7 @@ from datetime import timedelta
 from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings, GPSAlarmLog
 
 @csrf_exempt
-def traccar_webhook(request):
+def traccar_webhook1(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body.decode('utf-8'))
@@ -1331,7 +1484,6 @@ def get_full_battery_status(request, device_id):
     params = {
                     'deviceId': device_id,
                 }
-    print ("end po",endpoint ,"dev",device_id)
 
     try:
         response = requests.get(

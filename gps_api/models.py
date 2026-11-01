@@ -1,5 +1,11 @@
 from django.db import models
 from django.contrib.auth.models import User  # استيراد موديل المستخدمين الافتراضي لـ Django
+from datetime import timedelta
+from django.utils import timezone
+from django.conf import settings
+
+def get_default_expiration():
+    return timezone.now() + timedelta(days=180)
 
 class GPSDevice(models.Model):
     # ربط الجهاز بالمستخدم الحالي (المستخدم يمكنه امتلاك عدة أجهزة)
@@ -13,11 +19,23 @@ class GPSDevice(models.Model):
     traccar_id = models.IntegerField(unique=True)  # لتخزين الـ ID القادم من Traccar
     model = models.CharField(max_length=50, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+    expiration_date = models.DateTimeField(default=get_default_expiration, verbose_name="expiration date")
     pin_code = models.CharField(max_length=128, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
+    @property
+    def days_left(self):
+        if self.expiration_date:
+            now = timezone.now()
+            if self.expiration_date > now:
+                # طرح التواريخ يعطي كائن timedelta، نأخذ منه الأيام .days
+                return (self.expiration_date - now).days
+            return 0  # إذا انتهت الصلاحية يعيد 0
+        return None  # في حال لم يكن هناك تاريخ أصلاً
     def __str__(self):
         return f"{self.name} - ({self.user.username})"
+
+
+
 
 
 # 1. جدول إعدادات تنبيه السرعة الزائدة
@@ -109,6 +127,7 @@ class UserDeviceToken(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - Token"
+
 
 from django.db import models
 from django.contrib.auth import get_user_model
