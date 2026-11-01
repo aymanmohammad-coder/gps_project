@@ -1440,3 +1440,78 @@ def get_device_battery_status(request, device_id):
             
     except requests.exceptions.RequestException as e:
         return JsonResponse({"error": f"Connection failed: {str(e)}"}, status=500)
+
+import requests
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from requests.auth import HTTPBasicAuth
+import json
+
+
+
+@csrf_exempt
+def safe_engine_stop(request, device_id):
+    """
+    API لإيقاف السيارة بأمان (فقط إذا كانت السرعة أقل من 20 كم/ساعة)
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed. Use POST."}, status=405)
+        
+    auth = HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+    
+    
+    try:
+        # الخطوة 1: فحص السرعة الحالية للجهاز من خلال آخر موقع (Positions)
+        pos_endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
+       
+        pos_response = requests.get(pos_endpoint, params={'deviceId': device_id}, auth=auth, timeout=5)
+        
+        if pos_response.status_code != 200 or not pos_response.json():
+            return JsonResponse({"error": "Could not fetch current device position/speed"}, status=400)
+            
+        latest_position = pos_response.json()[-1]
+        
+        # تراكير يحفظ السرعة بالعقدة البحرية (Knots)، نحولها إلى كم/ساعة عن طريق ضربها في 1.852
+        speed_knots = latest_position.get('speed', 0)
+        speed_kmh = float(speed_knots) * 1.852
+        
+        # الخطوة 2: التحقق من شرط الأمان (السرعة أقل من 20 كم/ساعة)
+        if speed_kmh >= 20:
+            return JsonResponse({
+                "status": "rejected",
+                "message": f"❌ لا يمكن إيقاف السيارة لأسباب أمنية. السرعة الحالية مرتفعة جداً: {speed_kmh:.1f} كم/ساعة.",
+                "current_speed": round(speed_kmh, 1)
+            }, status=400)
+            
+        # الخطوة 3: إرسال أمر الإيقاف لـ Traccar (إذا تحقق الشرط)
+        cmd_endpoint = f"{TRACCAR_URL}/api/commands/send"
+        
+        # بناء جسم الأمر الموجه لجهاز PGC 303 (بروتوكول تراكير يستخدم الـ Relay)
+        command_payload = {
+            "deviceId": device_id,
+            "type": "engineStop", # أو "relay" حسب إعدادات الـ القالب في تراكير
+            "attributes": {}
+        }
+        
+        cmd_response = requests.post(
+            cmd_endpoint, 
+            json=command_payload, 
+            auth=auth, 
+            headers={"Content-Type": "application/json"},
+            timeout=5
+        )
+        
+        if cmd_response.status_code in:
+            return JsonResponse({
+                "status": "success",
+                "message": f" Done! تم إرسال أمر إيقاف المحرك بنجاح. السرعة عند التنفيذ: {speed_kmh:.1f} كم/ساعة.",
+                "current_speed": round(speed_kmh, 1)
+            }, status=200)
+        else:
+            return JsonResponse({
+                "error": f"Traccar failed to send command. Status: {cmd_response.status_code}",
+                "traccar_response": cmd_response.text
+            }, status=500)
+            
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": f"Connection to Traccar failed: {str(e)}"}, status=500)
