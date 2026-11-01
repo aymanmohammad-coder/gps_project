@@ -1322,16 +1322,22 @@ def get_full_battery_status(request, device_id):
     جلب حالة بطارية السيارة وبطارية الجهاز الداخلية معاً
     """
     ##endpoint = f"{TRACCAR_URL}/api/positions"
+    ####
+    
 
+    endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
+    
 
-    endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
-    params = {'deviceId': device_id}
+    params = {
+                    'deviceId': device_id,
+                }
+    print ("end po",endpoint ,"dev",device_id)
 
     try:
         response = requests.get(
             endpoint, 
             params=params, 
-            auth=HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD),
+            auth = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD),
             headers={"Accept": "application/json"},
             timeout=5
         )
@@ -1391,19 +1397,20 @@ def get_device_battery_status(request, device_id):
     """
     جلب حالة البطارية لجهاز معين باستخدام الـ ID الخاص به في Traccar
     """
-    endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+    endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
+           
     #endpoint = f"{TRACCAR_URL}/api/positions"
     
     # نطلب من التراكير جلب آخر موقع مسجل لهذا الجهاز بالتحديد
     params = {
         'deviceId': device_id,
     }
-    
+    print ("end po",endpoint ,"dev",device_id)
     try:
         response = requests.get(
             endpoint, 
             params=params, 
-            auth=HTTPBasicAuth(settings.TRACCAR_USER,settings.TRACCAR_PASSWORD),
+            auth = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD),
             headers={"Accept": "application/json"},
             timeout=5
         )
