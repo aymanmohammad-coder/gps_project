@@ -9,13 +9,26 @@ from rest_framework.permissions import IsAuthenticated # اختياري: لحظ�
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from requests.auth import HTTPBasicAuth
-from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken
+from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken,GPSAlarmLog
+from rest_framework import serializers
+from rest_framework.generics import DestroyAPIView
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.pagination import PageNumberPagination
+
+
+from django.conf import settings
+from rest_framework.generics import RetrieveUpdateDestroyAPIView
+from .serializers import GPSDeviceSerializer,GPSAlarmLogSerializer
+from .permissions import IsDeviceOwner,IsAlarmLogOwner
+
 
 class LiveGPSLocationAPI(APIView):
     """
     API مطور لجلب كافة ميزات وبيانات جهاز الـ GPS من نظام Traccar بالكامل
     مع استخراج متقدم لحالة الحساسات والتنبيهات
     """
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
     def get(self, request):
         device_id = request.query_params.get('device_id')
         
@@ -98,16 +111,6 @@ class LiveGPSLocationAPI(APIView):
             return Response({"error": f"تعذر الاتصال بخادم Traccar الخارجي: {str(e)}"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
 
-import requests
-from django.conf import settings
-from django.contrib.auth.models import User
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-
-# استيراد حزم الأمان والتوكين الإلزامية
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.authentication import TokenAuthentication
 
 class AddGPSDeviceAPI(APIView):
     """
@@ -208,6 +211,112 @@ class AddGPSDeviceAPI(APIView):
             return Response({
                 "error": f"تعذر الاتصال بخادم Traccar الخارجي لإتمام الإضافة: {str(e)}"
             }, status=status.HTTP_504_GATEWAY_TIMEOUT)
+
+
+
+class GPSDeviceDetailAPIView(RetrieveUpdateDestroyAPIView):
+    """
+    API لجلب تفاصيل، تحديث، وحذف جهاز الـ GPS 
+    بشكل متزامن بين قاعدة بيانات Django وسيرفر Traccar.
+    """
+    queryset = GPSDevice.objects.all()
+    serializer_class = GPSDeviceSerializer
+    
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated, IsDeviceOwner]
+
+    def get_queryset(self):
+        return GPSDevice.objects.filter(user=self.request.user)
+
+    def perform_update(self, serializer):
+        """
+        تخصيص عملية التحديث لتحديث البيانات في Traccar أولاً ثم في Django
+        """
+        # جلب الكائن الحالي قبل الحفظ لمعرفة القيم الثابتة الأصلية
+        current_device = self.get_object()
+        
+        # حفظ التعديلات الجديدة محلياً في ذاكرة الكائن (وليس في قاعدة البيانات بعد)
+        # لتمريرها إلى سيرفر Traccar أولاً
+        instance = serializer.save()
+
+        base_url = settings.TRACCAR_SERVER_URL
+        if not base_url.endswith('/'):
+            base_url += '/'
+            
+        update_url = f"{base_url}api/devices/{current_device.traccar_id}"
+        auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+
+        # بناء البيانات المرسلة لـ Traccar مع الحفاظ على imei و traccar_id الأصليين
+        traccar_payload = {
+            "id": current_device.traccar_id,
+            "name": instance.name,
+            "uniqueId": current_device.imei,  # استخدام الـ imei الثابت من قاعدة البيانات
+            "model": instance.model,
+            "phone": instance.phone_number,
+            "expirationTime": instance.expiration_date.isoformat() if instance.expiration_date else None
+        }
+
+        try:
+            # إرسال طلب التحديث للسيرفر الخارجي
+            traccar_response = requests.put(
+                update_url,
+                auth=auth_credentials,
+                json=traccar_payload,
+                timeout=5.0
+            )
+
+            # إذا رفض السيرفر التعديل، نرفع خطأ لإلغاء الحفظ
+            if traccar_response.status_code != 200:
+                raise requests.exceptions.RequestException(
+                    f"Traccar error {traccar_response.status_code}: {traccar_response.text}"
+                )
+
+        except requests.exceptions.RequestException as e:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                "error": f"فشل تحديث البيانات في خادم Traccar الخارجي، تم إلغاء التعديل المحلي: {str(e)}"
+            })
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        تخصيص عملية الحذف لحذف الجهاز من سيرفر Traccar أولاً ثم من Django
+        """
+        device = self.get_object()
+
+        base_url = settings.TRACCAR_SERVER_URL
+        if not base_url.endswith('/'):
+            base_url += '/'
+            
+        delete_url = f"{base_url}api/devices/{device.traccar_id}"
+        auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+
+        try:
+            traccar_response = requests.delete(
+                delete_url,
+                auth=auth_credentials,
+                timeout=5.0
+            )
+
+            if traccar_response.status_code ==200:
+                device_id = device.id
+                device.delete()
+                
+                return Response({
+                    "message": f"تم حذف الجهاز ذو المعرف {device_id} بنجاح من سيرفر Traccar ومن النظام المحلي."
+                }, status=status.HTTP_200_OK)
+                
+            else:
+                return Response({
+                    "error": "فشل حذف الجهاز من خادم Traccar الخارجي، تم إلغاء عملية الحذف المحلية",
+                    "status_code": traccar_response.status_code,
+                    "traccar_error": traccar_response.text
+                }, status=status.HTTP_502_BAD_GATEWAY)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                "error": f"تعذر الاتصال بخادم Traccar لإتمام الحذف: {str(e)}"
+            }, status=status.HTTP_504_GATEWAY_TIMEOUT)
+
 
 class GetMyDevicesAPI(APIView):
     """
@@ -1141,13 +1250,7 @@ class SetSosNumbersView1(APIView):
         else:
             return Response({"error": "فشل إرسال الأوامر، تأكد من اتصال سيرفر Traccar"}, status=status.HTTP_502_BAD_GATEWAY)
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.authentication import TokenAuthentication
-from rest_framework.pagination import PageNumberPagination
-from .models import GPSAlarmLog, GPSDevice
+
 
 # إعداد كلاس التصفيح (Pagination) لجلب 20 سجل في كل صفحة
 class StandardResultsSetPagination(PageNumberPagination):
@@ -1201,6 +1304,32 @@ class GPSAlarmLogListView(APIView):
         return paginator.get_paginated_response(logs_data)
 
 
+
+
+# 3. الـ View المسؤولة عن حذف السجل (سجل سجل)
+class DeleteGPSAlarmLogAPIView(DestroyAPIView):
+    """
+    API لحذف سجل تنبيه واحد محدد عن طريق معرفه (pk) في الرابط
+    """
+    queryset = GPSAlarmLog.objects.all()
+    serializer_class = GPSAlarmLogSerializer
+    
+    # استخدام الـ Token للتحقق من الهوية وفرض الصلاحية المخصصة
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated, IsAlarmLogOwner]
+
+    def destroy(self, request, *args, **kwargs):
+        # جلب سجل التنبيه بعد التحقق تلقائياً من الصلاحيات (IsAlarmLogOwner)
+        instance = self.get_object()
+        log_id = instance.id
+        
+        # تنفيذ عملية الحذف من قاعدة البيانات المحلية
+        self.perform_destroy(instance)
+        
+        # إرجاع رد نجاح مخصص ومفهوم للمستخدم
+        return Response({
+            "message": f"تم حذف سجل التنبيه ذو المعرف {log_id} بنجاح."
+        }, status=status.HTTP_200_OK)
 
 
 class GPSAlarmLogDeviceListView(APIView):
@@ -1468,8 +1597,10 @@ class GPSTripListView(APIView):
             "trips": trips_data
         }, status=status.HTTP_200_OK)
 
-
-
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+@api_view(['GET']) 
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
 def get_full_battery_status(request, device_id):
     """
     جلب حالة بطارية السيارة وبطارية الجهاز الداخلية معاً
@@ -1477,7 +1608,7 @@ def get_full_battery_status(request, device_id):
     ##endpoint = f"{TRACCAR_URL}/api/positions"
     ####
     
-
+    
     endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
     
 
@@ -1544,7 +1675,9 @@ from django.http import JsonResponse
 from requests.auth import HTTPBasicAuth
 
 # إعدادات الاتصال بسيرفر Traccar
-
+@api_view(['GET']) 
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
 def get_device_battery_status(request, device_id):
     """
     جلب حالة البطارية لجهاز معين باستخدام الـ ID الخاص به في Traccar
