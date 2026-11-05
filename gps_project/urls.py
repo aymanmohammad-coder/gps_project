@@ -4,9 +4,9 @@ from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
-from gps_api.views import  traccar_webhook ,ToggleMicView,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
+from gps_api.views import  traccar_webhook ,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
-
+from gps_api.views_sms import ToggleMicView
 from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -47,8 +47,8 @@ urlpatterns = [
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
-#  git add gps_api/permissions.py gps_api/views.py gps_api/serializers.py gps_project/urls.py 
-# git commit -m "feat: add safe engine stop and battery alerts for Coban 303"
+#  git add gps_api/permissions.py gps_api/views.py gps_api/views_sms.py gps_api/utils.py  gps_api/serializers.py gps_project/urls.py 
+# git commit -m "feat: update delete device an ddel alarm logs and uth"
 #git push origin main
 
 #on Aws

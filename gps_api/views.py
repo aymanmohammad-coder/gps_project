@@ -1046,14 +1046,19 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+import requests
+from requests.auth import HTTPBasicAuth
 
-def send_traccar_command(traccar_id, command_text):
+
+def send_traccar_command22(traccar_id, command_text):
     url = f"{settings.TRACCAR_SERVER_URL.rstrip('/')}/api/commands/send"
     auth_credentials = HTTPBasicAuth(settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
     
     payload = {
         "deviceId": traccar_id,
-        "type": "custom",
+         "type": "custom",
+        "textChannel": False,
+        
         "attributes": {"data": command_text}
     }
     try:
@@ -1123,7 +1128,7 @@ class SetSosNumbersView(APIView):
             
         # 🛡️ خطوة التحقق الحقيقية واللحظية برمجياً:
         # نقوم بفحص ما إذا كان السيرفر قد التقط الأرقام المحدثة في معطيات باكت البيانات من الجهاز
-        saved_and_verified = verify_device_attributes_on_tracara(device.traccar_id, raw_numbers)
+        saved_and_verified = verify_device_attributes_on_traccar(device.traccar_id, raw_numbers)
         
         # إذا تطابقت الأرقام، نؤكد للمستخدم الحفظ الحقيقي
         return Response({
@@ -1166,10 +1171,114 @@ def send_traccar_command1(traccar_id, command_text):
         return response.status_code in [200, 202]
     except requests.exceptions.RequestException:
         return False
+def send_traccar_command(traccar_id, command_text):
 
+    url = f"{settings.TRACCAR_SERVER_URL.rstrip('/')}/api/commands/send"
 
-# كلاس الـ API الخاص بتفعيل وإلغاء وضع المايك (التنصت)
+    auth = HTTPBasicAuth(
+        settings.TRACCAR_USER,
+        settings.TRACCAR_PASSWORD
+    )
+
+    payload = {
+        "deviceId": int(traccar_id),
+        "type": "custom",
+        "textChannel": False,
+        "attributes": {
+            "data": command_text
+        }
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            auth=auth,
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            return {
+                "success": True,
+                "status": "sent",
+                "http_status": 200
+            }
+
+        elif response.status_code == 202:
+            return {
+                "success": True,
+                "status": "queued",
+                "http_status": 202,
+                "queue": response.json()
+            }
+
+        return {
+            "success": False,
+            "status": "failed",
+            "error": response.text
+        }
+
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "status": "error",
+            "error": str(e)
+        }
 class ToggleMicView(APIView):
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+
+        try:
+            device = GPSDevice.objects.get(
+                pk=pk,
+                user=request.user
+            )
+
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        mode = request.data.get("mode")
+
+        commands = {
+            "monitor": "monitor123456",
+            "tracker": "tracker123456"
+        }
+
+        if mode not in commands:
+            return Response(
+                {"error": "يرجى إرسال monitor أو tracker"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        result = send_traccar_command(
+            device.traccar_id,
+            commands[mode]
+        )
+
+        if result["success"]:
+
+            return Response({
+                "success": True,
+                "status": "sent",
+                "message": f"تم قبول إرسال أمر {mode} من Traccar",
+                "device_name": device.name,
+                "imei": device.imei,
+                "traccar_id": device.traccar_id,
+              #  "command_id": result["command"].get("id")
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "success": False,
+            "status": "failed",
+            "error": result.get("error")
+        }, status=status.HTTP_502_BAD_GATEWAY)
+# كلاس الـ API الخاص بتفعيل وإلغاء وضع المايك (التنصت)
+class ToggleMicView22(APIView):
     permission_classes = [IsAuthenticated] # حماية الـ API ليكون للمستخدمين المسجلين فقط
 
     def post(self, request, pk):
@@ -1186,9 +1295,9 @@ class ToggleMicView(APIView):
         mode = request.data.get("mode")
         
         if mode == "monitor":
-            command = "monitor123456"
+            command = "monitor123456;"
         elif mode == "tracker":
-            command = "tracker123456"
+            command = "tracker123456;"
         else:
             return Response(
                 {"error": "الحالة المرسلة غير مدعومة. يرجى إرسال 'monitor' أو 'tracker'"}, 
@@ -1747,10 +1856,11 @@ def safe_engine_stop(request, device_id):
     
     try:
         # الخطوة 1: فحص السرعة الحالية للجهاز من خلال آخر موقع (Positions)
-        pos_endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
+        pos_endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+       ## pos_endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
        
         pos_response = requests.get(pos_endpoint, params={'deviceId': device_id}, auth=auth, timeout=5)
-        
+        print(pos_response)
         if pos_response.status_code != 200 or not pos_response.json():
             return JsonResponse({"error": "Could not fetch current device position/speed"}, status=400)
             
