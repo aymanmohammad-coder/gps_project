@@ -11,7 +11,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 
 # استيراد الموديل والدالة العامة
-from gps_api.models import GPSDevice  # تأكد من مسار الموديل الصحيح لديك
+from gps_api.models import GPSDevice ,EmergencyNumbers # تأكد من مسار الموديل الصحيح لديك
 from gps_api.utils import send_textbee_sms
 
 # Serializer للتأكد من صحة المدخلات في الـ JSON Body
@@ -173,3 +173,201 @@ class StopEngineView(APIView):
             "status": "failed",
             "error": result
         }, status=status.HTTP_502_BAD_GATEWAY)
+
+
+
+# 1. كلاس تعيين وحفظ أرقام الطوارئ عبر الـ SMS وقاعدة البيانات
+class SetSosNumbersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # استقبال الأرقام المرسلة من واجهة المستخدم
+        num1 = request.data.get("sos1")
+        num2 = request.data.get("sos2")
+        num3 = request.data.get("sos3")
+        
+        # إنشاء مصفوفة بالأرقام المتوفرة فقط (تجاهل الحقول الفارغة)
+        raw_numbers = [n for n in [num1, num2, num3] if n]
+        if not raw_numbers:
+            return Response(
+                {"error": "يجب إدخال رقم طوارئ واحد على الأقل"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # جلب رقم هاتف شريحة السيارة ديناميكياً لإرسال الـ SMS إليه
+        device_phone = getattr(device, 'phone', "+963946620316") or "+963946620316"
+        
+        # بناء أوامر الـ SMS التسلسلية المتوافقة مع أجهزة التتبع (مثل: admin123456 0933...)
+        commands = [f"admin123456 {num}" for num in raw_numbers]
+        success_sent_count = 0
+        
+        for cmd in commands:
+            success, _ = send_textbee_sms([device_phone], cmd)
+            if success:
+                success_sent_count += 1
+                
+        if success_sent_count == 0:
+            return Response(
+                {"error": "فشل إرسال رسائل الأوامر بالكامل عبر بوابة Textbee"}, 
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+            
+        # 💾 حفظ وتحديث البيانات محلياً في جدول EmergencyNumbers عند نجاح الإرسال
+        # استخدام update_or_create للتعامل مع الـ OneToOneField بسلاسة
+        emergency_obj, created = EmergencyNumbers.objects.update_or_create(
+            device=device,
+            defaults={
+                "sos_number_1": num1 if num1 else None,
+                "sos_number_2": num2 if num2 else None,
+                "sos_number_3": num3 if num3 else None,
+            }
+        )
+        
+        return Response({
+            "success": True,
+            "message": "تمت معالجة الأوامر وتحديث الأرقام محلياً بنجاح.",
+            "device_name": device.name,
+            "commands_sent_successfully": f"{success_sent_count} من أصل {len(commands)}",
+            "saved_locally": {
+                "sos_number_1": emergency_obj.sos_number_1,
+                "sos_number_2": emergency_obj.sos_number_2,
+                "sos_number_3": emergency_obj.sos_number_3,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+# 2. كلاس جلب أرقام الطوارئ المخزنة في الموديل الجديد
+class GetSosNumbersView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            # جلب السجل المرتبط بالجهاز عبر الـ related_name المكتوب في الموديل
+            emergency_info = device.emergency_numbers
+            sos_numbers = {
+                "sos1": emergency_info.sos_number_1,
+                "sos2": emergency_info.sos_number_2,
+                "sos3": emergency_info.sos_number_3,
+                "updated_at": emergency_info.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+            }
+        except EmergencyNumbers.DoesNotExist:
+            # في حال لم يتم تعيين أرقام طوارئ لهذا الجهاز من قبل
+            sos_numbers = {
+                "sos1": None,
+                "sos2": None,
+                "sos3": None,
+                "updated_at": None
+            }
+            
+        return Response({
+            "success": True,
+            "device_name": device.name,
+            "imei": device.imei,
+            "sos_numbers": sos_numbers
+        }, status=status.HTTP_200_OK)
+
+###############################
+
+class SetSosNumbersView1(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            # جلب الجهاز بناءً على المعرف وملكية المستخدم لحماية البيانات
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # نأخذ الأرقام كما هي مدخلة من المستخدم
+        num1 = request.data.get("sos1")
+        num2 = request.data.get("sos2")
+        num3 = request.data.get("sos3")
+        
+        raw_numbers = [n for n in [num1, num2, num3] if n]
+        if not raw_numbers:
+            return Response(
+                {"error": "يجب إدخال رقم طوارئ واحد على الأقل"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # جلب رقم هاتف شريحة جهاز التتبع ديناميكياً
+        device_phone = getattr(device, 'phone', "+963946620316") or "+963946620316"
+        
+        # بناء الأوامر النصية بحسب الأرقام المدخلة
+        commands = [f"admin123456 {num}" for num in raw_numbers]
+        
+        success_sent_count = 0
+        failed_commands = []
+
+        # إرسال كل أمر عبر الـ SMS كرسالة مستقلة للجهاز
+        for i, cmd in enumerate(commands):
+            # نمرر رقم شريحة الجهاز كـ list ونص الأمر كـ message
+            success, result = send_textbee_sms([device_phone], cmd)
+            if success:
+                success_sent_count += 1
+            else:
+                # الاحتفاظ بالرقم الذي فشل إرسال أمره لمراجعة العميل
+                failed_commands.append(raw_numbers[i])
+                
+        if success_sent_count == 0:
+            return Response(
+                {"error": "فشل إرسال أوامر الطوارئ بالكامل عبر بوابة الرسائل النصية"}, 
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+            
+        # إرجاع استجابة واضحة تبيّن كم عدد الرسائل التي تم جدولتها بنجاح
+        return Response({
+            "success": True,
+            "message": "تمت معالجة إرسال أرقام الطوارئ بنجاح عبر الـ SMS.",
+            "device_name": device.name,
+            "imei": device.imei,
+            "commands_sent_successfully": f"{success_sent_count} من أصل {len(commands)}",
+            "failed_numbers": failed_commands
+        }, status=status.HTTP_200_OK)
+
+
+class GetSosNumbersView1(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            # جلب الجهاز بناءً على المعرف والملكية لحماية الخصوصية
+            device = GPSDevice.objects.get(pk=pk, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response(
+                {"error": "الجهاز غير موجود أو لا تملك صلاحية الوصول إليه"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # جلب الأرقام المخزنة في حقول الموديل (تأكد من مطابقة أسماء الحقول لديك)
+        sos_numbers = {
+            "sos1": getattr(device, 'sos1', None),
+            "sos2": getattr(device, 'sos2', None),
+            "sos3": getattr(device, 'sos3', None),
+        }
+        
+        return Response({
+            "success": True,
+            "device_name": device.name,
+            "imei": device.imei,
+            "sos_numbers": sos_numbers
+        }, status=status.HTTP_200_OK)

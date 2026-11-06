@@ -4,9 +4,9 @@ from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
-from gps_api.views import  traccar_webhook ,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
+from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
-from gps_api.views_sms import ToggleMicView,StopEngineView
+from gps_api.views_sms import ToggleMicView,StopEngineView,SetSosNumbersView,GetSosNumbersView
 from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -28,6 +28,8 @@ urlpatterns = [
     path('api/gps/<int:pk>/stope-engine/', StopEngineView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/toggle-mic/', ToggleMicView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/set-sos/', SetSosNumbersView.as_view(), name='set-sos'),
+    path('api/gps/<int:pk>/get-sos/', GetSosNumbersView.as_view(), name='get-sos'),
+
     path('api/gps/alarm-logs/', GPSAlarmLogListView.as_view(), name='gps-alarm-logs'),
 
     path('api/gps/alarm-logs/<int:pk>/delete/', DeleteGPSAlarmLogAPIView.as_view(), name='delete-alarm-log'),
@@ -50,7 +52,7 @@ urlpatterns = [
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add gps_project/settings.py gps_project/urls.py gps_api/views.py gps_api/views_sms.py gps_api/utils.py
-# git commit -m " send sms _utils_views_sms"
+# git commit -m " send sms ok _utils_views_sms"
 #git push origin main
 
 #on Aws
