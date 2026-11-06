@@ -6,7 +6,7 @@ from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCode
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
 from gps_api.views import  traccar_webhook ,SetSosNumbersView,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
-from gps_api.views_sms import ToggleMicView
+from gps_api.views_sms import ToggleMicView,StopEngineView
 from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -24,6 +24,8 @@ urlpatterns = [
     path('api/gps/oil/status/', OilStatusAPI.as_view(), name='get-oil-status'),
 
     path('api/traccar/webhook/',traccar_webhook, name='traccar_webhook'),
+    
+    path('api/gps/<int:pk>/stope-engine/', StopEngineView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/toggle-mic/', ToggleMicView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/set-sos/', SetSosNumbersView.as_view(), name='set-sos'),
     path('api/gps/alarm-logs/', GPSAlarmLogListView.as_view(), name='gps-alarm-logs'),
@@ -41,14 +43,14 @@ urlpatterns = [
     path('api/gps/devices/<int:device_id>/trips/', GPSTripListView.as_view(), name='gps-device-trips'),
     path('api/device/<int:device_id>/battery/', get_device_battery_status, name='device_battery'),
     path('api/device/<int:device_id>/full_battery/', get_full_battery_status, name='device_full_battery'),
-    path('api/device/<int:device_id>/stop-engine/', safe_engine_stop, name='safe_engine_stop'),
+   
   ]    
 
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
-#  git add gps_api/permissions.py gps_api/views.py gps_api/views_sms.py gps_api/utils.py  gps_api/serializers.py gps_project/urls.py 
-# git commit -m "feat: update delete device an ddel alarm logs and uth"
+#/  git add gps_project/settings.py gps_project/urls.py gps_api/views.py gps_api/views_sms.py gps_api/utils.py
+# git commit -m " send sms _utils_views_sms"
 #git push origin main
 
 #on Aws

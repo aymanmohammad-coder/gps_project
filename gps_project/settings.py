@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'gps_api',
 ]
+TEXTBEE_API_KEY = "txb_NdKvKoClLSFzAmNURNy1ZNoTpLK0YNsu"
 
 TRACCAR_SERVER_URL = "http://16.192.203.80:8082/"     
 TRACCAR_USER = "ayman.mohammad@gmail.com"

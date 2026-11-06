@@ -1,56 +1,47 @@
 # utils.py
+
 import requests
-from requests.auth import HTTPBasicAuth
+from django.conf import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
-def send_sms_via_android(phone_number, message_text):
-    # 💡 الرابط والمسار الرسمي المعتمد من التوثيق لقنوات الإرسال السحابي للطرف الثالث
-    API_URL = "https://api.sms-gate.app/"
+def send_textbee_sms(recipients, message):
+    """
+    دالة عامة لإرسال رسائل SMS عبر بوابة Textbee
+    :param recipients: قائمة بأرقام الهواتف e.g. ['+963946620316']
+    :param message: نص الرسالة المراد إرسالها
+    :return: tuple (success_boolean, result_data_or_error_string)
+    """
+    url = "https://api.textbee.dev/api/v1/gateway/send-sms"
+    api_key = getattr(settings, 'TEXTBEE_API_KEY', None)
     
-    # المعاملات الإضافية الموصى بها في التوثيق لتخطي فحص صيغة الرقم الصارمة
-    
-    params = {"skipPhoneValidation": True}
-    
-    USERNAME = "BNUPZA"
-    PASSWORD = "apmmsfwkcujna6"
-    DEVICE_ID = "90xKuJ1Wjne03k_CzZsnn"
-    
-    # الهيكلية القياسية المطابقة لتوثيق المنصة لترحيل حزمة الرسالة النصية العادية
-    payload = {
-        "textMessage": {
-            "text": message_text         # نص الأمر المرسل للمركبة (monitor123456)
-        },
-        "deviceId": DEVICE_ID,           # معرف جهاز الأندرويد السحابي
-        "phoneNumbers": [phone_number],  # يجب إرسال الرقم داخل مصفوفة (List)
-       
+    if not api_key:
+        logger.error("Textbee API key is not configured in Django settings.")
+        return False, "تكوين السيرفر غير مكتمل: مفتاح الـ API مفقود"
 
-        
-        "priority": 100          ,         # الأولوية القصوى (تتخطى قيود الـ Rate Limits المدمجة بالتطبيق)
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': api_key,
     }
-    print(payload)
+    
+    sms_payload = {
+        "recipients": recipients,
+        "message": message
+    }
+    
     try:
-        # استخدام نظام التوثيق الأساسي المعتمد في المنصة (Basic Auth)
-        auth_credentials = HTTPBasicAuth(USERNAME, PASSWORD)
-        print(auth_credentials)
-        response = requests.post(
-            API_URL, 
-            params=params,
-            json=payload, 
-            auth=auth_credentials, 
-            headers={"Content-Type": "application/json"},
-            timeout=10
-        )
+        response = requests.post(url, json=sms_payload, headers=headers, timeout=15)
         
-        print("--- SMS GATE RESPONSE ---")
-        print(f"Status Code: {response.status_code}")
-        print(f"Response Body: {response.text}")
-        print("-------------------------")
-        
-        # يعود السيرفر بكود 200 أو 201 عند قبول معالجة الرسالة بنجاح وتوجيهها لهاتفك
-        return response.status_code in [200, 201]
+        if response.status_code in[200,201,202]:
+            try:
+                return True, response.json()
+            except ValueError:
+                return True, response.text
+        else:
+            logger.warning(f"Textbee rejected request. Status: {response.status_code}, Response: {response.text}")
+            return False, f"رفضت البوابة الطلب بكود: {response.status_code}"
             
     except requests.exceptions.RequestException as e:
-        logger.error(f"فشل الاتصال بالسيرفر السحابي لـ SMS Gate: {str(e)}")
-        return False
+        logger.error(f"External Textbee gateway connection failed: {str(e)}")
+        return False, f"فشل الاتصال ببوابة الرسائل الخارجية: {str(e)}"
