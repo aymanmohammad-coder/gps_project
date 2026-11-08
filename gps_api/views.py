@@ -802,10 +802,20 @@ from .models import GPSDevice, GPSAlarmLog, UserDeviceToken # تأكد من اس
 #     firebase_admin.initialize_app()
 @csrf_exempt
 def traccar_webhook(request):
+    if request.method == 'GET':
+        return JsonResponse({'status': 'success', 'message': 'Webhook endpoint is active'}, status=200)
+        
     if request.method == 'POST':
         try:
+            if not request.body:
+                return JsonResponse({'status': 'ignored', 'message': 'Empty body received'}, status=400)
+                
             data = json.loads(request.body.decode('utf-8'))
-            
+
+# 🟢 سطر تشخيصي مؤقت لطباعة البيانات القادمة من الجهاز في السجلات
+            print("--- TRACCAR DATA RECEIVED ---")
+            print(json.dumps(data, indent=2))
+            print("-----------------------------")
             event = data.get('event', {})
             position = data.get('position', {})
             traccar_device_info = data.get('device', {})
