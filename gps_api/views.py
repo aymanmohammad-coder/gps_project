@@ -881,7 +881,8 @@ def traccar_webhook(request):
                 body = f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى المسموح به هو ({speed_setting.max_speed} كم/س)."
 
             # 📳 [3] فحص مستويات الاهتزاز مقارنة بالقيم المحددة بقاعدة البيانات
-            elif vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type in ["vibration", "shock", "tampering"]):
+            elif alarm_type in ["vibration", "tampering", "shock", "movement"] or attributes.get('event') == "01" or attributes.get('event') == 1:
+           # elif vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type in ["vibration", "shock", "tampering"]):
                 is_alarm = True
                 save_type = 'vibration'
                 body = f"📳 تحذير اهتزاز! تم رصد اهتزاز بمستوى ({current_vibration}) وتجاوز الحساسية المحددة ({vibration_setting.max_vibration}) أو محاولة تلاعب بالجهاز."
