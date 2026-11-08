@@ -800,9 +800,130 @@ from .models import GPSDevice, GPSAlarmLog, UserDeviceToken # تأكد من اس
 # تأكد من تهيئة Firebase Admin في مكان ما عند إقلاع المشروع (مثال: apps.py أو settings.py)
 # if not firebase_admin._apps:
 #     firebase_admin.initialize_app()
-
 @csrf_exempt
 def traccar_webhook(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body.decode('utf-8'))
+            
+            event = data.get('event', {})
+            position = data.get('position', {})
+            traccar_device_info = data.get('device', {})
+            
+            # محاولة جلب التنبيه من الحدث أو من خصائص الموقع مباشرة
+            event_type = event.get('type')
+            attributes = position.get('attributes', {}) or event.get('attributes', {})
+            alarm_type = attributes.get('alarm', '')
+            
+            traccar_id = event.get('deviceId') or traccar_device_info.get('id') or data.get('device', {}).get('id')
+            
+            if not traccar_id:
+                return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
+            
+            try:
+                device = GPSDevice.objects.get(traccar_id=traccar_id)
+                user = device.user
+            except GPSDevice.DoesNotExist:
+                return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
+            
+            title = f"تنبيه طوارئ من: {device.name}"
+            body = "تنبيه جديد من نظام التتبع."
+            called_number = None
+            current_speed = round(position.get('speed', 0) * 1.852, 1) if position.get('speed') is not None else 0
+
+            # 🚨 1. منطق فحص الـ SOS
+            if event_type == "sos" or alarm_type == "sos":
+                sos_index = attributes.get('index') or attributes.get('sos_index')
+                if not sos_index:
+                    time_threshold = timezone.now() - timedelta(minutes=3)
+                    recent_sos_count = GPSAlarmLog.objects.filter(
+                        device=device, 
+                        event_type='sos', 
+                        created_at__gte=time_threshold
+                    ).count()
+                    sos_index = (recent_sos_count % 3) + 1 
+                
+                called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
+                
+                # فحص الحالات المصاحبة
+                speed_setting = getattr(device, 'speed_setting', None)
+                vibration_setting = getattr(device, 'vibration_setting', None)
+                geofence_setting = getattr(device, 'geofence_setting', None)
+                
+                current_vibration = attributes.get('vibration', 0)
+                is_outside_geofence = attributes.get('out_geofence', False)
+
+                reasons = []
+                if speed_setting and speed_setting.is_active and current_speed > speed_setting.max_speed:
+                    reasons.append(f"تجاوز السرعة ({current_speed} كم/س)")
+                if vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type in ["vibration", "shock"]):
+                    reasons.append("رصد اهتزاز عنيف")
+                if geofence_setting and geofence_setting.is_active and (is_outside_geofence or event_type == "geofenceExit"):
+                    reasons.append("تجاوز النطاق الجغرافي")
+
+                if reasons:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number}. بالتزامن مع: {' و '.join(reasons)}."
+                else:
+                    body = f"🚨 نداء استغاثة SOS! جاري الاتصال بـ {called_number} (العدادات الحالية طبيعية)."
+                save_type = 'sos'
+
+            # 🏃‍♂️ 2. تنبيهات السرعة (سواء حدث مستقل أو علامة في الموقع)
+            elif event_type in ["deviceOverspeed", "speedLimitExceeded"] or alarm_type == "overspeed":
+                body = f"تنبيه! تجاوزت السيارة السرعة المحددة: {current_speed} كم/س."
+                save_type = 'overspeed'
+
+            # 🗺️ 3. تنبيهات النطاق الجغرافي
+            elif event_type in ["geofenceEnter", "geofenceExit"] or alarm_type in ["geofenceEnter", "geofenceExit"]:
+                body = "تحذير! خرجت السيارة عن النطاق الجغرافي المسموح به." if (event_type == "geofenceExit" or alarm_type == "geofenceExit") else "دخلت السيارة النطاق الجغرافي."
+                save_type = 'geofence'
+
+            # 📳 4. تنبيهات الاهتزاز والتلاعب (مرونة أعلى في المسميات القادمة من أجهزة الصيني)
+            elif alarm_type in ["vibration", "tampering", "shock", "movement"]:
+                body = "تحذير! تم رصد اهتزاز في السيارة أو محاولة تلاعب بالجهاز."
+                save_type = 'vibration'
+
+            # 🔑 5. إضافة تنبيه حالة تشغيل/إطفاء السيارة (Acc Ignition) وهو مهم جداً للمستخدمين
+            elif event_type in ["deviceOnline", "ignitionOn", "ignitionOff"] or alarm_type in ["ignition", "powerCut"]:
+                status_text = "تم تشغيل محرك السيارة" if (event_type == "ignitionOn" or alarm_type == "ignition") else "تم إطفاء محرك السيارة"
+                body = f"تنبيه حالة المحرك: {status_text}."
+                save_type = 'ignition'
+
+            else:
+                # إذا لم يتطابق مع أي تنبيه خطير، نقوم بحفظه كموقع عادي أو تجاهله دون إرسال إشعار فايبربيز مزعج
+                return JsonResponse({'status': 'ignored', 'message': f'Data received but event type ({event_type}/{alarm_type}) not tracked'}, status=200)
+
+            # 💾 حفظ السجل في قاعدة البيانات
+            GPSAlarmLog.objects.create(
+                device=device,
+                event_type=save_type,
+                title=title,
+                body=body,
+                called_sos_number=called_number,
+                current_speed=current_speed
+            )
+
+            # 🚀 إرسال الإشعار الفوري لـ Firebase (الكود الخاص بك ممتاز يترك كما هو)
+            fcm_tokens = list(UserDeviceToken.objects.filter(user=user).values_list('fcm_token', flat=True))
+            if fcm_tokens:
+                message = messaging.MulticastMessage(
+                    notification=messaging.Notification(title=title, body=body),
+                    data={"device_id": str(device.id), "event_type": save_type, "click_action": "FLUTTER_NOTIFICATION_CLICK"},
+                    tokens=fcm_tokens,
+                )
+                response = messaging.send_each_for_multicast(message)
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success and (resp.exception.code == 'invalid-argument' or 'not-registered' in str(resp.exception)):
+                            UserDeviceToken.objects.filter(fcm_token=fcm_tokens[idx]).delete()
+
+            return JsonResponse({'status': 'success', 'message': 'Alarm logged and notification sent'}, status=200)
+
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+def traccar_webhook_2(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body.decode('utf-8'))
