@@ -486,7 +486,7 @@ class DeviceAllSettingsAPI(APIView):
                 "is_active": vibration.is_active if vibration else False
             },
             "geofence_settings": {
-                "max_geofence_radius": geofence.max_radius if geofence else 500.0,
+                "max_geofence_radius": geofence.max_radius if geofence else 100.0,
                 "is_active": geofence.is_active if geofence else False
             }
         }, status=status.HTTP_200_OK)
@@ -1818,7 +1818,7 @@ class VerifyPinCodeView(APIView):
             return Response({
                 "status": "failed",
                 "error": "رمز الـ PIN غير صحيح، تم رفض العملية"
-            }, status=status.status_code)
+            }, status=status.HTTP_404_NOT_FOUND)
 
 import requests
 import hashlib
