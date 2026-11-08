@@ -800,8 +800,150 @@ from .models import GPSDevice, GPSAlarmLog, UserDeviceToken # تأكد من اس
 # تأكد من تهيئة Firebase Admin في مكان ما عند إقلاع المشروع (مثال: apps.py أو settings.py)
 # if not firebase_admin._apps:
 #     firebase_admin.initialize_app()
+
+
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from datetime import timedelta
+from gps_api.models import GPSDevice, GPSAlarmLog, UserDeviceToken, SpeedSettings, VibrationSettings, GeofenceSettings
+# تأكد من استيراد الجداول الجديدة وجلب مكتبة Firebase الخاصة بك (messaging)
+
 @csrf_exempt
 def traccar_webhook(request):
+    if request.method == 'GET':
+        return JsonResponse({'status': 'success', 'message': 'Webhook endpoint is active'}, status=200)
+        
+    if request.method == 'POST':
+        try:
+            if not request.body:
+                return JsonResponse({'status': 'ignored', 'message': 'Empty body received'}, status=400)
+                
+            data = json.loads(request.body.decode('utf-8'))
+
+            # 🟢 سجل تشخيصي حقيقي في السيرفر
+            print("--- TRACCAR DATA RECEIVED ---")
+            print(json.dumps(data, indent=2))
+            print("-----------------------------")
+            
+            event = data.get('event', {})
+            position = data.get('position', {})
+            traccar_device_info = data.get('device', {})
+            
+            event_type = event.get('type')
+            attributes = position.get('attributes', {}) or event.get('attributes', {})
+            alarm_type = attributes.get('alarm', '')
+            
+            traccar_id = event.get('deviceId') or traccar_device_info.get('id') or data.get('device', {}).get('id')
+            
+            if not traccar_id:
+                return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
+            
+            try:
+                device = GPSDevice.objects.get(traccar_id=traccar_id)
+                user = device.user
+            except GPSDevice.DoesNotExist:
+                return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
+            
+            # 🔄 جلب إعدادات الأمان الخاصة بالجهاز من قاعدة البيانات أو استخدام القيم الافتراضية
+            speed_setting = SpeedSettings.objects.filter(device=device).first()
+            vibration_setting = VibrationSettings.objects.filter(device=device).first()
+            geofence_setting = GeofenceSettings.objects.filter(device=device).first()
+
+            # تحويل السرعة من عقدة (Knots) القادمة من Traccar إلى كم/ساعة
+            current_speed = round(position.get('speed', 0) * 1.852, 1) if position.get('speed') is not None else 0
+            current_vibration = attributes.get('vibration', 0) or attributes.get('shock', 0)
+            
+            # المتغيرات الخاصة ببناء التنبيه
+            is_alarm = False
+            save_type = None
+            title = f"تنبيه أمان من: {device.name}"
+            body = ""
+            called_number = None
+
+            # 🚨 [1] فحص حالة استغاثة الطوارئ SOS الافتراضية للجهاز
+            if event_type == "sos" or alarm_type == "sos":
+                is_alarm = True
+                save_type = 'sos'
+                sos_index = attributes.get('index') or attributes.get('sos_index')
+                if not sos_index:
+                    time_threshold = timezone.now() - timedelta(minutes=3)
+                    recent_sos_count = GPSAlarmLog.objects.filter(device=device, event_type='sos', created_at__gte=time_threshold).count()
+                    sos_index = (recent_sos_count % 3) + 1 
+                called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
+                body = f"🚨 نداء استغاثة SOS فوري! جاري الاتصال بـ {called_number}."
+
+            # 🏃‍♂️ [2] فحص تجاوز السرعة المخزنة في قاعدة البيانات
+            elif speed_setting and speed_setting.is_active and current_speed > speed_setting.max_speed:
+                is_alarm = True
+                save_type = 'overspeed'
+                body = f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى المسموح به هو ({speed_setting.max_speed} كم/س)."
+
+            # 📳 [3] فحص مستويات الاهتزاز مقارنة بالقيم المحددة بقاعدة البيانات
+            elif vibration_setting and vibration_setting.is_active and (current_vibration > vibration_setting.max_vibration or alarm_type in ["vibration", "shock", "tampering"]):
+                is_alarm = True
+                save_type = 'vibration'
+                body = f"📳 تحذير اهتزاز! تم رصد اهتزاز بمستوى ({current_vibration}) وتجاوز الحساسية المحددة ({vibration_setting.max_vibration}) أو محاولة تلاعب بالجهاز."
+
+            # 🗺️ [4] فحص السياج الجغرافي المخزن بقاعدة البيانات
+            # يعتمد هذا الجزء على التنبيه البروتوكولي أو فحص المسافة التراكمية إذا أرسلها ترأكار كـ دالة مسافة
+            elif geofence_setting and geofence_setting.is_active and (event_type in ["geofenceEnter", "geofenceExit"] or alarm_type in ["geofenceEnter", "geofenceExit"] or attributes.get('out_geofence', False)):
+                is_alarm = True
+                save_type = 'geofence'
+                body = f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي النشط المسموح به الممتد لـ ({geofence_setting.max_radius} متر)."
+
+            # 🔑 [5] فحص حالات تشغيل/إطفاء السيارة المهمة
+            elif event_type in ["ignitionOn", "ignitionOff"] or alarm_type in ["ignition", "powerCut"]:
+                is_alarm = True
+                save_type = 'ignition'
+                status_text = "تم تشغيل محرك السيارة 🟢" if (event_type == "ignitionOn" or alarm_type == "ignition") else "تم إطفاء محرك السيارة 🔴"
+                body = f"حالة المحرك: {status_text}."
+
+            # 🛑 في حال لم تتوفر شروط التنبيهات النشطة، يتم إهمال الإشعار لعدم إزعاج المستخدم
+            if not is_alarm:
+                return JsonResponse({
+                    'status': 'ignored', 
+                    'message': f'Data logged locally. Metrics (Speed: {current_speed}, Vib: {current_vibration}) within safety range.'
+                }, status=200)
+
+            # 💾 حفظ السجل في قاعدة البيانات ليعرض لاحقاً في التطبيق للمستخدم
+            GPSAlarmLog.objects.create(
+                device=device,
+                event_type=save_type,
+                title=title,
+                body=body,
+                called_sos_number=called_number,
+                current_speed=current_speed
+            )
+
+            # 🚀 إرسال الإشعار الفوري لـ Firebase لكل أجهزة هذا المستخدم
+            fcm_tokens = list(UserDeviceToken.objects.filter(user=user).values_list('fcm_token', flat=True))
+
+            if fcm_tokens:
+                message = messaging.MulticastMessage(
+                    notification=messaging.Notification(title=title, body=body),
+                    data={
+                        "device_id": str(device.id),
+                        "event_type": save_type,
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+                    },
+                    tokens=fcm_tokens,
+                )
+                response = messaging.send_each_for_multicast(message)
+                
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success:
+                            if resp.exception.code == 'invalid-argument' or 'not-registered' in str(resp.exception):
+                                UserDeviceToken.objects.filter(fcm_token=fcm_tokens[idx]).delete()
+
+            return JsonResponse({'status': 'success', 'message': 'Alarm evaluated, logged, and notification sent'}, status=200)
+
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+@csrf_exempt
+def traccar_webhook_3(request):
     if request.method == 'GET':
         return JsonResponse({'status': 'success', 'message': 'Webhook endpoint is active'}, status=200)
         
@@ -1676,7 +1818,7 @@ class VerifyPinCodeView(APIView):
             return Response({
                 "status": "failed",
                 "error": "رمز الـ PIN غير صحيح، تم رفض العملية"
-            }, status=status.HTTP_401_UNAUTHORIZED)
+            }, status=status.status_code)
 
 import requests
 import hashlib
