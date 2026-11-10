@@ -59,15 +59,36 @@ class VibrationSettings(models.Model):
         return f"اهتزاز: {self.device.name} (مستوى {self.max_vibration})"
 
 # 3. جدول إعدادات السياج والنطاق الجغرافي
+from django.db import models
+
 class GeofenceSettings(models.Model):
-    device = models.OneToOneField(GPSDevice, on_delete=models.CASCADE, related_name="geofence_setting")
-    max_radius = models.FloatField(default=500.0) # المسافة المسموحة بالمتر خارج النطاق
+    # نحدد الخيارات المتاحة لنوع النطاق
+    GEOFENCE_TYPES = [
+        ('circle', 'Circle'),
+        ('polygon', 'Rectangle'), # أو rectangle
+    ]
+
+    device = models.OneToOneField(GPSDevice, on_delete=models.CASCADE, related_name='geofence_settings') # أو ForeignKey حسب منطق مشروعك
+    is_active = models.BooleanField(default=True)
+    
+    # 1. تحديد نوع النطاق
+    geofence_type = models.CharField(max_length=10, choices=GEOFENCE_TYPES, default='circle')
+    
+    # 2. إحداثيات الدائرة (المركز والقطر)
+    center_latitude = models.FloatField(null=True, blank=True)
+    center_longitude = models.FloatField(null=True, blank=True)
+    max_radius = models.FloatField(null=True, blank=True) # القطر الحالي
+    
+    # 3. إحداثيات المستطيل (نقطتان تشكلان الزوايا المتقاطعة للمستطيل)
+    # الزاوية الشمالية الشرقية (North-East)
+    ne_latitude = models.FloatField(null=True, blank=True)
+    ne_longitude = models.FloatField(null=True, blank=True)
+    # الزاوية الجنوبية الغربية (South-West)
+    sw_latitude = models.FloatField(null=True, blank=True)
+    sw_longitude = models.FloatField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"سياج: {self.device.name} ({self.max_radius} متر)"
-
+   
 
 
 

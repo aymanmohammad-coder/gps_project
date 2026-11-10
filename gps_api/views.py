@@ -505,11 +505,22 @@ class DeviceAllSettingsAPI(APIView):
         # استقبال المدخلات من الطلب
         max_speed = request.data.get('max_speed')
         max_vibration = request.data.get('max_vibration')
-        max_geofence_radius = request.data.get('max_geofence_radius')
+       # max_geofence_radius = request.data.get('max_geofence_radius')
         
         # استقبال حالات التفعيل (True/False)
         speed_active = request.data.get('speed_active', True)
         vibration_active = request.data.get('vibration_active', True)
+        
+        geofence_type = request.data.get('geofence_type') # 'circle' أو 'polygon'
+        max_geofence_radius = request.data.get('max_geofence_radius')
+        center_lat = request.data.get('center_latitude')
+        center_lng = request.data.get('center_longitude')
+            
+            # إحداثيات المستطيل
+        ne_lat = request.data.get('ne_latitude')
+        ne_lng = request.data.get('ne_longitude')
+        sw_lat = request.data.get('sw_latitude')
+        sw_lng = request.data.get('sw_longitude')
         geofence_active = request.data.get('geofence_active', True)
 
         # أ) تحديث أو إنشاء جدول السرعة
@@ -527,14 +538,29 @@ class DeviceAllSettingsAPI(APIView):
             )
 
         # ج) تحديث أو إنشاء جدول النطاق الجغرافي
-        if max_geofence_radius is not None:
-            GeofenceSettings.objects.update_or_create(
-                device=device,
-                defaults={'max_radius': max_geofence_radius, 'is_active': geofence_active}
-            )
+        if any([geofence_type, max_geofence_radius, center_lat, center_lng, ne_lat, sw_lat]):
+                
+                # بناء قاموس بالبيانات الافتراضية المراد حفظها
+                geofence_defaults = {
+                    'is_active': geofence_active
+                }
+                
+                # إضافة القيم للقاموس فقط إذا تم إرسالها لتجنب تصفير القيم القديمة بالخطأ
+                if geofence_type is not None:      geofence_defaults['geofence_type'] = geofence_type
+                if max_geofence_radius is not None: geofence_defaults['max_radius'] = max_geofence_radius
+                if center_lat is not None:         geofence_defaults['center_latitude'] = center_lat
+                if center_lng is not None:         geofence_defaults['center_longitude'] = center_lng
+                if ne_lat is not None:             geofence_defaults['ne_latitude'] = ne_lat
+                if ne_lng is not None:             geofence_defaults['ne_longitude'] = ne_lng
+                if sw_lat is not None:             geofence_defaults['sw_latitude'] = sw_lat
+                if sw_lng is not None:             geofence_defaults['sw_longitude'] = sw_lng
+        
+                GeofenceSettings.objects.update_or_create(
+                    device=device,
+                    defaults=geofence_defaults
+                )
 
         return Response({"message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح"}, status=status.HTTP_200_OK)
-
     # 3. حذف وإلغاء تفعيل كافة الإعدادات (DELETE)
     def delete(self, request):
         device_id = request.query_params.get('device_id')
