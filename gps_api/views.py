@@ -472,7 +472,8 @@ class DeviceAllSettingsAPI(APIView):
         # جلب البيانات بشكل آمن حتى لو لم تكن منشأة مسبقاً (سيُرجع قيم افتراضية)
         speed = getattr(device, 'speed_setting', None)
         vibration = getattr(device, 'vibration_setting', None)
-        geofence = getattr(device, 'geofence_setting', None)
+        
+        geofence_setting = getattr(device, 'geofence_setting', None)
 
         return Response({
             "device_id": device.id,
@@ -486,8 +487,20 @@ class DeviceAllSettingsAPI(APIView):
                 "is_active": vibration.is_active if vibration else False
             },
             "geofence_settings": {
-                "max_geofence_radius": geofence.max_radius if geofence else 100.0,
-                "is_active": geofence.is_active if geofence else False
+            "geofence_type": geofence_setting.geofence_type, # 'circle' أو 'polygon'
+            "geofence_active": geofence_setting.is_active,
+            
+            # إحداثيات الدائرة
+            "center_latitude": geofence_setting.center_latitude,
+            "center_longitude": geofence_setting.center_longitude,
+            "max_geofence_radius": geofence_setting.max_radius,
+            
+            # إحداثيات المستطيل
+            "ne_latitude": geofence_setting.ne_latitude,
+            "ne_longitude": geofence_setting.ne_longitude,
+            "sw_latitude": geofence_setting.sw_latitude,
+            "sw_longitude": geofence_setting.sw_longitude
+            
             }
         }, status=status.HTTP_200_OK)
 
