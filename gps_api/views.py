@@ -458,7 +458,6 @@ class DeviceAllSettingsAPI(APIView):
             return GPSDevice.objects.get(user=user, id=device_id)
         except GPSDevice.DoesNotExist:
             return None
-
     # 1. جلب الإعدادات من الـ 3 جداول معاً (GET)
     def get(self, request):
         device_id = request.query_params.get('device_id')
@@ -469,10 +468,9 @@ class DeviceAllSettingsAPI(APIView):
         if not device:
             return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالوصول إليه"}, status=status.HTTP_403_FORBIDDEN)
 
-        # جلب البيانات بشكل آمن حتى لو لم تكن منشأة مسبقاً (سيُرجع قيم افتراضية)
+        # جلب البيانات بشكل آمن من الخاصية العكسية للعلاقات (Related Objects)
         speed = getattr(device, 'speed_setting', None)
         vibration = getattr(device, 'vibration_setting', None)
-        
         geofence_setting = getattr(device, 'geofence_setting', None)
 
         return Response({
@@ -486,21 +484,21 @@ class DeviceAllSettingsAPI(APIView):
                 "max_vibration": vibration.max_vibration if vibration else 5,
                 "is_active": vibration.is_active if vibration else False
             },
+            # 🟢 تم تصحيح الفحص هنا ليعيد قيم افتراضية آمنة في حال كانت الإعدادات غير منشأة بعد
             "geofence_settings": { 
-            "geofence_type": geofence_setting.geofence_type, # 'circle' أو 'polygon'
-            "geofence_active": geofence_setting.is_active,
-            
-            # إحداثيات الدائرة
-            "center_latitude": geofence_setting.center_latitude,
-            "center_longitude": geofence_setting.center_longitude,
-            "max_geofence_radius": geofence_setting.max_radius,
-            
-            # إحداثيات المستطيل
-            "ne_latitude": geofence_setting.ne_latitude,
-            "ne_longitude": geofence_setting.ne_longitude,
-            "sw_latitude": geofence_setting.sw_latitude,
-            "sw_longitude": geofence_setting.sw_longitude
-            
+                "geofence_type": geofence_setting.geofence_type if geofence_setting else "circle",
+                "geofence_active": geofence_setting.is_active if geofence_setting else False,
+                
+                # إحداثيات الدائرة
+                "center_latitude": geofence_setting.center_latitude if geofence_setting else None,
+                "center_longitude": geofence_setting.center_longitude if geofence_setting else None,
+                "max_geofence_radius": geofence_setting.max_radius if geofence_setting else None,
+                
+                # إحداثيات المستطيل
+                "ne_latitude": geofence_setting.ne_latitude if geofence_setting else None,
+                "ne_longitude": geofence_setting.ne_longitude if geofence_setting else None,
+                "sw_latitude": geofence_setting.sw_latitude if geofence_setting else None,
+                "sw_longitude": geofence_setting.sw_longitude if geofence_setting else None
             }
         }, status=status.HTTP_200_OK)
 
