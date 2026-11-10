@@ -486,7 +486,7 @@ class DeviceAllSettingsAPI(APIView):
                 "max_vibration": vibration.max_vibration if vibration else 5,
                 "is_active": vibration.is_active if vibration else False
             },
-            "geofence_settings": {
+            "geofence_settings": { 
             "geofence_type": geofence_setting.geofence_type, # 'circle' أو 'polygon'
             "geofence_active": geofence_setting.is_active,
             
