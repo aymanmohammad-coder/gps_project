@@ -7,7 +7,7 @@ from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
 from gps_api.views_sms import ToggleMicView,StopEngineView,SetSosNumbersView,GetSosNumbersView
-from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView
+from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView,ClearDeviceAlarmLogsView
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -33,7 +33,15 @@ urlpatterns = [
     path('api/gps/alarm-logs/', GPSAlarmLogListView.as_view(), name='gps-alarm-logs'),
 
     path('api/gps/alarm-logs/<int:pk>/delete/', DeleteGPSAlarmLogAPIView.as_view(), name='delete-alarm-log'),
-
+    path('api/gps/alarm-logs/<int:device_id>/logs/clear/', ClearDeviceAlarmLogsView.as_view(), name='clear-device-logs',  ),
+     #/api/gps/alarm-logs/1/logs/clear/?event_type=sos
+     #/api/gps/alarm-logs/1/logs/clear/
+     #  "allowed_types": [
+      #  "sos",
+       # "overspeed",
+        #"geofence",
+        #"vibration"
+    #]
      path('api/gps/devices/<int:device_id>/logs/', GPSAlarmLogDeviceListView.as_view(), name='gps-device-alarm-logs'),
     path('api/gps/<int:pk>/set-pin/', CreateOrUpdatePinCodeView.as_view(), name='set-gps-pin'),
     path('api/gps/<int:pk>/verify-pin/', VerifyPinCodeView.as_view(), name='verify-gps-pin'),
@@ -51,8 +59,8 @@ urlpatterns = [
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
-#/  git add gps_project/settings.py gps_project/urls.py gps_api/views.py gps_api/views_sms.py gps_api/utils.py
-# git commit -m " webhook"
+#/  git add  gps_api/views.py gps_project/urls.py gps_api/models.py 
+# git commit -m " geo"
 #git push origin main
 
 #on Aws

@@ -443,7 +443,7 @@ class LogoutAPI(APIView):
             return Response({"error": f"حدث خطأ أثناء تسجيل الخروج: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
+from django.forms.models import model_to_dict
 
 class DeviceAllSettingsAPI(APIView):
     """
@@ -505,6 +505,7 @@ class DeviceAllSettingsAPI(APIView):
     # 2. إضافة أو تحديث الإعدادات في الجداول الثلاثة معاً (POST / PUT)
     # استخدمنا نفس الدالة للإضافة والتعديل تسهيلاً للتعامل مع التطبيق (Upsert Logic)
     def post(self, request):
+       
         device_id = request.data.get('device_id')
         if not device_id:
             return Response({"error": "حقل 'device_id' مطلوب في جسم الطلب"}, status=status.HTTP_400_BAD_REQUEST)
@@ -550,7 +551,7 @@ class DeviceAllSettingsAPI(APIView):
 
         # ج) تحديث أو إنشاء جدول النطاق الجغرافي
         if any([geofence_type, max_geofence_radius, center_lat, center_lng, ne_lat, sw_lat]):
-                
+                saved_geofence_data = None
                 # بناء قاموس بالبيانات الافتراضية المراد حفظها
                 geofence_defaults = {
                     'is_active': geofence_active
@@ -571,7 +572,12 @@ class DeviceAllSettingsAPI(APIView):
                     defaults=geofence_defaults
                 )
 
-        return Response({"message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح"}, status=status.HTTP_200_OK)
+       # return Response({"message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح"}, status=status.HTTP_200_OK)
+        saved_geofence_data = model_to_dict(geofence_obj)
+        return Response({ "message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح",
+                    "saved_geofence": saved_geofence_data,
+                    "sent_defaults": geofence_defaults if saved_geofence_data else None
+                }, status=status.HTTP_200_OK)
     # 3. حذف وإلغاء تفعيل كافة الإعدادات (DELETE)
     def delete(self, request):
         device_id = request.query_params.get('device_id')
@@ -1879,6 +1885,62 @@ class GPSAlarmLogListView(APIView):
 
 
 
+from django.shortcuts import get_object_or_404
+
+
+class ClearDeviceAlarmLogsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, device_id):
+        # 1. التحقق من وجود الجهاز
+        device = get_object_or_404(GPSDevice, id=device_id)
+
+        # 2. جلب السجلات الأساسية للجهاز
+        logs_queryset = GPSAlarmLog.objects.filter(device=device)
+
+        # 3. استخراج أنواع التنبيهات المسموحة من الموديل مباشرة
+        valid_alarm_types = dict(GPSAlarmLog.ALARM_TYPES)
+
+        # التحقق مما إذا تم تمرير event_type في الرابط (مثل: ?event_type=sos أو ?event_type=sos,overspeed)
+        event_type_param = request.query_params.get('event_type')
+
+        if event_type_param:
+            # دعم تمرير أكثر من نوع مفصولين بفاصلة
+            requested_types = [
+                t.strip() for t in event_type_param.split(',') if t.strip()
+            ]
+
+            # التحقق من أن جميع الأنواع المرسلة صحيحة ومطابقة لـ ALARM_TYPES
+            invalid_types = [
+                t for t in requested_types if t not in valid_alarm_types
+            ]
+            if invalid_types:
+                return Response(
+                    {
+                        'status': 'error',
+                        'message': f"نوع التنبيه غير صالح: {', '.join(invalid_types)}",
+                        'allowed_types': list(valid_alarm_types.keys()),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # فلترة السجلات حسب الأنواع المطلوبة
+            logs_queryset = logs_queryset.filter(
+                event_type__in=requested_types
+            )
+
+        # 4. تنفيذ الحذف
+        deleted_count, _ = logs_queryset.delete()
+
+        return Response(
+            {
+                'status': 'success',
+                'message': f'تم حذف {deleted_count} سجل بنجاح.',
+                'deleted_count': deleted_count,
+                'filtered_by': event_type_param if event_type_param else 'all',
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # 3. الـ View المسؤولة عن حذف السجل (سجل سجل)
 class DeleteGPSAlarmLogAPIView(DestroyAPIView):
