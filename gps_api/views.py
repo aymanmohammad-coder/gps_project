@@ -567,10 +567,11 @@ class DeviceAllSettingsAPI(APIView):
                 if sw_lat is not None:             geofence_defaults['sw_latitude'] = sw_lat
                 if sw_lng is not None:             geofence_defaults['sw_longitude'] = sw_lng
         
-                GeofenceSettings.objects.update_or_create(
-                    device=device,
-                    defaults=geofence_defaults
-                )
+                geofence_obj, created = GeofenceSettings.objects.update_or_create(
+                        device=device,
+                        defaults=geofence_defaults
+                    )
+               
 
        # return Response({"message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح"}, status=status.HTTP_200_OK)
         saved_geofence_data = model_to_dict(geofence_obj)

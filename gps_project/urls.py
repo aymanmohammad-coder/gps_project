@@ -60,7 +60,7 @@ urlpatterns = [
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add  gps_api/views.py gps_project/urls.py gps_api/models.py 
-# git commit -m " geo"
+# git commit -m " del logs"
 #git push origin main
 
 #on Aws
