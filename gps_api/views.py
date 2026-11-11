@@ -459,6 +459,7 @@ class DeviceAllSettingsAPI(APIView):
         except GPSDevice.DoesNotExist:
             return None
     # 1. جلب الإعدادات من الـ 3 جداول معاً (GET)
+        # 1. جلب الإعدادات من الـ 3 جداول معاً (GET)
     def get(self, request):
         device_id = request.query_params.get('device_id')
         if not device_id:
@@ -468,10 +469,10 @@ class DeviceAllSettingsAPI(APIView):
         if not device:
             return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالوصول إليه"}, status=status.HTTP_403_FORBIDDEN)
 
-        # جلب البيانات بشكل آمن من الخاصية العكسية للعلاقات (Related Objects)
-        speed = getattr(device, 'speed_setting', None)
-        vibration = getattr(device, 'vibration_setting', None)
-        geofence_setting = getattr(device, 'geofence_setting', None)
+        # الجلب المباشر من الجداول الثلاثة (أضمن وأسرع من getattr)
+        speed = SpeedSettings.objects.filter(device=device).first()
+        vibration = VibrationSettings.objects.filter(device=device).first()
+        geofence_setting = GeofenceSettings.objects.filter(device=device).first()
 
         return Response({
             "device_id": device.id,
@@ -484,7 +485,6 @@ class DeviceAllSettingsAPI(APIView):
                 "max_vibration": vibration.max_vibration if vibration else 5,
                 "is_active": vibration.is_active if vibration else False
             },
-            # 🟢 تم تصحيح الفحص هنا ليعيد قيم افتراضية آمنة في حال كانت الإعدادات غير منشأة بعد
             "geofence_settings": { 
                 "geofence_type": geofence_setting.geofence_type if geofence_setting else "circle",
                 "geofence_active": geofence_setting.is_active if geofence_setting else False,
@@ -550,14 +550,12 @@ class DeviceAllSettingsAPI(APIView):
             )
 
         # ج) تحديث أو إنشاء جدول النطاق الجغرافي
+        saved_geofence_data = None
+        geofence_defaults = None
         if any([geofence_type, max_geofence_radius, center_lat, center_lng, ne_lat, sw_lat]):
-                saved_geofence_data = None
-                # بناء قاموس بالبيانات الافتراضية المراد حفظها
                 geofence_defaults = {
                     'is_active': geofence_active
-                }
-                
-                # إضافة القيم للقاموس فقط إذا تم إرسالها لتجنب تصفير القيم القديمة بالخطأ
+                    }
                 if geofence_type is not None:      geofence_defaults['geofence_type'] = geofence_type
                 if max_geofence_radius is not None: geofence_defaults['max_radius'] = max_geofence_radius
                 if center_lat is not None:         geofence_defaults['center_latitude'] = center_lat
@@ -566,14 +564,11 @@ class DeviceAllSettingsAPI(APIView):
                 if ne_lng is not None:             geofence_defaults['ne_longitude'] = ne_lng
                 if sw_lat is not None:             geofence_defaults['sw_latitude'] = sw_lat
                 if sw_lng is not None:             geofence_defaults['sw_longitude'] = sw_lng
-        
+
                 geofence_obj, created = GeofenceSettings.objects.update_or_create(
                         device=device,
                         defaults=geofence_defaults
                     )
-               
-
-       # return Response({"message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح"}, status=status.HTTP_200_OK)
         saved_geofence_data = model_to_dict(geofence_obj)
         return Response({ "message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح",
                     "saved_geofence": saved_geofence_data,
