@@ -7,6 +7,23 @@ from django.conf import settings
 def get_default_expiration():
     return timezone.now() + timedelta(days=180)
 
+
+
+class UserProfile(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    mobile_num = models.CharField(max_length=20, unique=True)
+    otp_code = models.CharField(max_length=6, blank=True, null=True)
+    otp_created_at = models.DateTimeField(blank=True, null=True)
+
+    def is_otp_valid(self):
+        # صلاحية الكود 10 دقائق مثلاً
+        if not self.otp_created_at:
+            return False
+        return timezone.now() <= self.otp_created_at + timedelta(minutes=10)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.mobile_num}"
+
 class GPSDevice(models.Model):
     # ربط الجهاز بالمستخدم الحالي (المستخدم يمكنه امتلاك عدة أجهزة)
     user = models.ForeignKey(

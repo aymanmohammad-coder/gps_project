@@ -3,7 +3,7 @@ from django.urls import path
 from gps_api.views import LiveGPSLocationAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,DeviceAllSettingsAPI,EmergencyNumbersAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
-from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI
+from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
 from gps_api.views_sms import ToggleMicView,StopEngineView,SetSosNumbersView,GetSosNumbersView
@@ -11,6 +11,9 @@ from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView,ClearD
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
+    path('api/auth/verify-otp/', VerifyOTPAPI.as_view(), name='verify-otp'),
+    path('api/auth/forget-password/', ForgetPasswordRequestAPI.as_view(), name='forget-password'),
+    path('api/auth/reset-password-confirm/', ResetPasswordConfirmAPI.as_view(), name='reset-password-confirm'),
     path('api/auth/login/', LoginAPI.as_view(), name='auth_login'),
     path('api/auth/logout/', LogoutAPI.as_view(), name='auth_logout'),
     # مسار الـ API الجديد الخاص بك
@@ -22,7 +25,6 @@ urlpatterns = [
     path('api/gps/emergency-numbers/', EmergencyNumbersAPI.as_view(), name='emergency-numbers-crud'),
     path('api/gps/oil/change/', OilChangeRecordAPI.as_view(), name='record-oil-change'),
     path('api/gps/oil/status/', OilStatusAPI.as_view(), name='get-oil-status'),
-
     path('api/traccar/webhook/',traccar_webhook, name='traccar_webhook'),
     
     path('api/gps/<int:pk>/stope-engine/', StopEngineView.as_view(), name='toggle-mic'),

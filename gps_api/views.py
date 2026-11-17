@@ -3,19 +3,20 @@ from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-
+from django.db import transaction
 from django.contrib.auth.models import User
 from rest_framework.permissions import IsAuthenticated # اختياري: لحظر المستخدمين غير المسجلين
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from requests.auth import HTTPBasicAuth
-from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken,GPSAlarmLog
+from .models import UserProfile,GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken,GPSAlarmLog
 from rest_framework import serializers
 from rest_framework.generics import DestroyAPIView
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.pagination import PageNumberPagination
-
-
+from django.contrib.auth import authenticate
+from .models import UserProfile, UserDeviceToken
+from .utils import send_textbee_sms
 from django.conf import settings
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from .serializers import GPSDeviceSerializer,GPSAlarmLogSerializer
@@ -365,7 +366,271 @@ class GetMyDevicesAPI(APIView):
 
 
 
+import random
 class RegisterAPI(APIView):
+    """API لتسجيل مستخدم جديد وإرسال كود التفعيل عبر SMS"""
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        email = request.data.get('email', '')
+        mobile_num = request.data.get('mobile_num')
+
+        # 1. التحقق من الحقول الإجبارية
+        if not username or not password or not mobile_num:
+            return Response(
+                {'error': 'اسم المستخدم، كلمة المرور، ورقم الهاتف حقول إجبارية'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. التحقق من عدم تكرار اسم المستخدم أو رقم الهاتف
+        if User.objects.filter(username=username).exists():
+            return Response({'error': 'اسم المستخدم هذا مأخوذ بالفعل'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if UserProfile.objects.filter(mobile_num=mobile_num).exists():
+            return Response({'error': 'رقم الهاتف هذا مسجل مسبقاً'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # توليد كود عشوائي من 6 أرقام
+        otp_code = str(random.randint(100000, 999999))
+        sms_message = f"كود تفعيل حسابك هو: {otp_code}"
+
+        # استخدام transaction لضمان عدم إنشاء حساب في حال فشل إرسال الرسالة
+        try:
+            with transaction.atomic():
+                # إنشاء المستخدم بحالة غير مفعل (is_active=False)
+                user = User.objects.create_user(
+                    username=username,
+                    password=password,
+                    email=email,
+                    is_active=False
+                )
+
+                # حفظ رقم الهاتف والكود في البروفايل
+                UserProfile.objects.create(
+                    user=user,
+                    mobile_num=mobile_num,
+                    otp_code=otp_code,
+                    otp_created_at=timezone.now()
+                )
+
+                # إرسال الرسالة عبر Textbee (يجب تمرير الرقم داخل قائمة)
+                success, sms_response = send_textbee_sms([mobile_num], sms_message)
+                
+                if not success:
+                    # رفع خطأ لإلغاء حفظ المستخدم في قاعدة البيانات
+                    raise Exception(sms_response)
+
+        except Exception as e:
+            return Response(
+                {'error': f'فشل إرسال رسالة التفعيل: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            'message': 'تم إنشاء الحساب بنجاح. يرجى إدخال كود التحقق المرسل إلى هاتفك لتفعيل الحساب.',
+            'username': user.username,
+            'mobile_num': mobile_num
+        }, status=status.HTTP_201_CREATED)
+
+
+class VerifyOTPAPI(APIView):
+    """API للتحقق من كود SMS وتفعيل الحساب"""
+    def post(self, request):
+        mobile_num = request.data.get('mobile_num')
+        otp_code = request.data.get('otp_code')
+
+        if not mobile_num or not otp_code:
+            return Response(
+                {'error': 'يرجى إدخال رقم الهاتف وكود التحقق'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            profile = UserProfile.objects.select_related('user').get(mobile_num=mobile_num)
+        except UserProfile.DoesNotExist:
+            return Response({'error': 'رقم الهاتف غير مسجل في النظام'}, status=status.HTTP_404_NOT_FOUND)
+
+        user = profile.user
+
+        if user.is_active:
+            return Response({'message': 'الحساب مفعل مسبقاً'}, status=status.HTTP_200_OK)
+
+        # التحقق من تطابق الكود وصلاحيته
+        if profile.otp_code != str(otp_code):
+            return Response({'error': 'كود التحقق غير صحيح'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not profile.is_otp_valid():
+            return Response({'error': 'انتهت صلاحية كود التحقق، يرجى طلب كود جديد'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # تفعيل الحساب وتصفير الكود
+        user.is_active = True
+        user.save()
+
+        profile.otp_code = None
+        profile.save()
+
+        # إنشاء التوكين الآن بعد التفعيل ليدخل المستخدم مباشرة
+        token, _ = Token.objects.get_or_create(user=user)
+
+        return Response({
+            'message': 'تم تفعيل الحساب بنجاح',
+            'uid': user.id,
+            'token': token.key,
+            'username': user.username
+        }, status=status.HTTP_200_OK)
+
+
+class LoginAPI(APIView):
+    """API لتسجيل الدخول وإنشاء مفتاح التحقق (Token)"""
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        fcm_token = request.data.get('fcm_token')
+
+        if not username or not password:
+            return Response({'error': 'يرجى إدخال اسم المستخدم وكلمة المرور'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            user_obj = User.objects.get(username=username)
+            if not user_obj.is_active:
+                return Response(
+                    {'error': 'حسابك غير مفعل. يرجى تأكيد رقم هاتفك أولاً.', 'is_verified': False},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except User.DoesNotExist:
+            pass
+
+        user = authenticate(username=username, password=password)
+
+        if user is not None:
+            token, _ = Token.objects.get_or_create(user=user)
+            if fcm_token:
+                UserDeviceToken.objects.update_or_create(
+                    fcm_token=fcm_token,
+                    defaults={'user': user}
+                )
+            return Response({
+                'message': 'تم تسجيل الدخول بنجاح',
+                'uid': user.id,
+                'token': token.key,
+                'username': user.username
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'بيانات الدخول غير صحيحة، يرجى المحاولة مجدداً'}, status=status.HTTP_401_UNAUTHORIZED)
+class ForgetPasswordRequestAPI(APIView):
+    """API لطلب استعادة كلمة المرور وإرسال كود التحقق عبر SMS"""
+    def post(self, request):
+        username = request.data.get('username')
+        mobile_num = request.data.get('mobile_num')
+
+        if not username or not mobile_num:
+            return Response(
+                {'error': 'يرجى إدخال اسم المستخدم ورقم الجوال'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # التحقق من تطابق اسم المستخدم مع رقم الجوال في النظام
+        try:
+            profile = UserProfile.objects.select_related('user').get(
+                user__username=username,
+                mobile_num=mobile_num
+            )
+        except UserProfile.DoesNotExist:
+            return Response(
+                {'error': 'اسم المستخدم أو رقم الجوال غير صحيح، أو غير متطابقين'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # توليد كود عشوائي من 6 أرقام
+        otp_code = str(random.randint(100000, 999999))
+        sms_message = f"كود استعادة كلمة المرور الخاصة بحسابك هو: {otp_code}"
+
+        # حفظ الكود ووقت الإنشاء في البروفايل
+        profile.otp_code = otp_code
+        profile.otp_created_at = timezone.now()
+        profile.save()
+
+        # إرسال الرسالة عبر Textbee
+        success, sms_response = send_textbee_sms([mobile_num], sms_message)
+
+        if not success:
+            return Response(
+                {'error': f'فشل إرسال رسالة التحقق: {sms_response}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            'message': 'تم إرسال كود التحقق إلى رقم جوالك بنجاح',
+            'username': username,
+            'mobile_num': mobile_num
+        }, status=status.HTTP_200_OK)
+
+
+class ResetPasswordConfirmAPI(APIView):
+    """API للتحقق من الكود وتعيين كلمة المرور الجديدة"""
+    def post(self, request):
+        username = request.data.get('username')
+        mobile_num = request.data.get('mobile_num')
+        otp_code = request.data.get('otp_code')
+        new_password = request.data.get('new_password')
+
+        if not all([username, mobile_num, otp_code, new_password]):
+            return Response(
+                {'error': 'جميع الحقول مطلوبة (اسم المستخدم، رقم الجوال، الكود، كلمة المرور الجديدة)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # جلب البروفايل والمستخدم
+        try:
+            profile = UserProfile.objects.select_related('user').get(
+                user__username=username,
+                mobile_num=mobile_num
+            )
+        except UserProfile.DoesNotExist:
+            return Response(
+                {'error': 'بيانات الحساب غير صحيحة'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # التحقق من صحة الكود وصلاحيته
+        if not profile.otp_code or profile.otp_code != str(otp_code):
+            return Response(
+                {'error': 'كود التحقق غير صحيح'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not profile.is_otp_valid():
+            return Response(
+                {'error': 'انتهت صلاحية كود التحقق، يرجى طلب كود جديد'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = profile.user
+
+        # تعيين كلمة المرور الجديدة وتشفيرها تلقائياً
+        user.set_password(new_password)
+        
+        # في حال كان الحساب غير مفعل سابقاً، يمكن تفعيله هنا تلقائياً لأنه أثبت ملكية الرقم
+        if not user.is_active:
+            user.is_active = True
+            
+        user.save()
+
+        # تصفير الكود لمنع إعادة استخدامه
+        profile.otp_code = None
+        profile.save()
+
+        # حذف التوكين القديم وإصدار توكين جديد لزيادة الأمان (إخراج أي جلسات قديمة)
+        Token.objects.filter(user=user).delete()
+        new_token = Token.objects.create(user=user)
+
+        return Response({
+            'message': 'تم تغيير كلمة المرور بنجاح',
+            'token': new_token.key,
+            'username': user.username
+        }, status=status.HTTP_200_OK)
+
+
+class RegisterAPI_1(APIView):
     """
     API لتسجيل مستخدم جديد في النظام
     """
@@ -393,7 +658,7 @@ class RegisterAPI(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
-class LoginAPI(APIView):
+class LoginAPI_1(APIView):
     """
     API لتسجيل الدخول وإنشاء مفتاح التحقق (Token)
     """
