@@ -982,7 +982,7 @@ class OilChangeRecordAPI(APIView):
             else:
                 return Response({"error": "تعذر جلب قراءة عداد السيارة من سيرفر Traccar لتسجيل العملية"}, status=status.HTTP_502_BAD_GATEWAY)
         except requests.exceptions.RequestException as e:
-            return Response({"error": f"فشل الاتصال بسيرفر تراكار الداخلي: {str(e)}"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
+            return Response({"error": f"فشل الاتصال بسيرفر تراكار الداخلي: {str(e)}" ,"response":response}, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
         # 2. توثيق وحفظ العملية في جدول السجل (Log)
         OilChangeLog.objects.create(
@@ -2653,7 +2653,7 @@ def safe_engine_stop(request, device_id):
     try:
         # الخطوة 1: فحص السرعة الحالية للجهاز من خلال آخر موقع (Positions)
         pos_endpoint = f"{settings.TRACCAR_SERVER_URL}/api/positions"
-       ## pos_endpoint = f"{settings.TRACCAR_SERVER_URL}api/positions"
+      
        
         pos_response = requests.get(pos_endpoint, params={'deviceId': device_id}, auth=auth, timeout=5)
         print(pos_response)
