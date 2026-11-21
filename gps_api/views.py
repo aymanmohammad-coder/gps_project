@@ -954,9 +954,10 @@ class OilChangeRecordAPI(APIView):
     def post(self, request):
         device_id = request.data.get('device_id')
         oil_type = request.data.get('oil_type')
-        filter_changed = request.data.get('filter_changed', False) # True أو False
-        oil_interval_km = request.data.get('oil_interval_km', 5000.0) # المسافة الدورية الافتراضية
-        warn_before_km = request.data.get('warn_before_km', 500.0)
+        filter_raw = request.data.get('filter_changed', False)
+        filter_changed = str(filter_raw).lower() in ['true', '1', 'yes']
+        oil_interval_km = float(request.data.get('oil_interval_km', 5000.0)) # المسافة الدورية الافتراضية
+        warn_before_km = float(request.data.get('warn_before_km', 500.0))
 
         if not device_id or not oil_type:
             return Response({"error": "الحقول 'device_id' و 'oil_type' مطلوبة"}, status=status.HTTP_400_BAD_REQUEST)
