@@ -972,7 +972,7 @@ class OilChangeRecordAPI(APIView):
         auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
         
         try:
-            response = requests.get(traccar_url, auth=auth_credentials, params={'deviceId': device_id}, timeout=5.0)
+            response = requests.get(traccar_url, auth=auth_credentials, params={'deviceId': device.traccar_id}, timeout=5.0)
             current_odometer_km = 0.0
             if response.status_code == 200 and response.json():
                 latest_position = response.json()[-1]
@@ -980,9 +980,9 @@ class OilChangeRecordAPI(APIView):
                 total_meters = latest_position.get('attributes', {}).get('totalDistance', 0.0)
                 current_odometer_km = total_meters / 1000.0
             else:
-                return Response({"error": "تعذر جلب قراءة عداد السيارة من سيرفر Traccar لتسجيل العملية","response":response}, status=status.HTTP_502_BAD_GATEWAY)
+                return Response({"error": "تعذر جلب قراءة عداد السيارة من سيرفر Traccar لتسجيل العملية","response":response.text}, status=status.HTTP_502_BAD_GATEWAY)
         except requests.exceptions.RequestException as e:
-            return Response({"error": f"فشل الاتصال بسيرفر تراكار الداخلي: {str(e)}" ,"response":response}, status=status.HTTP_504_GATEWAY_TIMEOUT)
+            return Response({"error": f"فشل الاتصال بسيرفر تراكار الداخلي: {str(e)}" }, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
         # 2. توثيق وحفظ العملية في جدول السجل (Log)
         OilChangeLog.objects.create(
