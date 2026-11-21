@@ -3,7 +3,7 @@ from django.contrib.auth.models import User  # استيراد موديل الم�
 from datetime import timedelta
 from django.utils import timezone
 from django.conf import settings
-
+from django.db.models import Sum
 def get_default_expiration():
     return timezone.now() + timedelta(days=180)
 
@@ -214,7 +214,9 @@ class GPSTrip(models.Model):
     end_time = models.DateTimeField()
     distance = models.FloatField(help_text="المسافة بالكيلومتر")
     duration = models.IntegerField(help_text="مدة الرحلة بالثواني")
-    
+
+    max_speed = models.FloatField(default=0.0, help_text="أقصى سرعة في الرحلة (كم/س)")  # <-- أضف هذا الحقل
+  
     # حقل لمنع تكرار سحب نفس الرحلة من Traccar
     # Traccar لا يملك ID ثابت للرحلة، لذا سنقوم بتركيب بصمة فريدة (unique hash) تجمع بين وقت البداية والنهاية والمعرف
     trip_signature = models.CharField(max_length=100, unique=True, db_index=True)
@@ -222,3 +224,79 @@ class GPSTrip(models.Model):
 
     def __str__(self):
         return f"Trip for {self.device.name} [{self.distance} km]"
+
+
+
+
+from django.db import models
+from django.utils import timezone
+from django.db.models import Sum, Max
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+
+class DeviceOdometer(models.Model):
+    device = models.OneToOneField(
+        GPSDevice, 
+        on_delete=models.CASCADE, 
+        related_name='odometer'
+    )
+    archived_distance = models.FloatField(default=0.0, help_text="المسافة المجمعة من الرحلات التي تم تصفيرها")
+    archived_duration = models.IntegerField(default=0, help_text="المدة المجمعة بالثواني")
+    max_speed_record = models.FloatField(default=0.0, help_text="الرقم القياسي لأقصى سرعة منذ التفعيل")
+    last_reset_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def get_current_trip_stats(self):
+        """حساب إحصائيات الرحلة الحالية (المسافة، المدة، متوسط السرعة، وأقصى سرعة حالية)"""
+        trips = self.device.trips.filter(end_time__gt=self.last_reset_at)
+        agg = trips.aggregate(
+            dist=Sum('distance'),
+            dur=Sum('duration'),
+            curr_max_speed=Max('max_speed')
+        )
+        curr_dist = round(agg['dist'] or 0.0, 2)
+        curr_dur = agg['dur'] or 0
+        curr_avg_speed = round((curr_dist / (curr_dur / 3600)), 1) if curr_dur > 0 else 0.0
+        curr_max = round(agg['curr_max_speed'] or 0.0, 1)
+        
+        return {
+            "distance": curr_dist,
+            "duration": curr_dur,
+            "avg_speed": curr_avg_speed,
+            "max_speed": curr_max,
+        }
+
+    def get_live_total_stats(self):
+        """حساب الإحصائيات الكلية اللحظية بدون ازدواجية"""
+        current = self.get_current_trip_stats()
+        live_total_dist = round(self.archived_distance + current["distance"], 2)
+        live_total_dur = self.archived_duration + current["duration"]
+        live_total_avg_speed = round((live_total_dist / (live_total_dur / 3600)), 1) if live_total_dur > 0 else 0.0
+
+        return {
+            "total_distance": live_total_dist,
+            "total_avg_speed": live_total_avg_speed,
+            "max_speed_record": round(self.max_speed_record, 1),
+        }
+
+    def __str__(self):
+        return f"Odometer for {self.device.name}"
+
+
+# ==================== SIGNALS ====================
+
+@receiver(post_save, sender=GPSDevice)
+def create_device_odometer(sender, instance, created, **kwargs):
+    """1. إنشاء سجل عداد تلقائياً عند إضافة جهاز جديد"""
+    if created:
+        DeviceOdometer.objects.get_or_create(device=instance)
+
+
+@receiver(post_save, sender=GPSTrip)
+def update_odometer_max_speed(sender, instance, created, **kwargs):
+    """2. تحديث الرقم القياسي للسرعة تلقائياً عند وصول أي رحلة جديدة من Traccar"""
+    if created and instance.max_speed > 0:
+        odometer, _ = DeviceOdometer.objects.get_or_create(device=instance.device)
+        if instance.max_speed > odometer.max_speed_record:
+            odometer.max_speed_record = round(instance.max_speed, 1)
+            odometer.save(update_fields=['max_speed_record', 'updated_at'])

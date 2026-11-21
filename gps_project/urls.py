@@ -7,7 +7,7 @@ from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPa
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
 from gps_api.views_sms import ToggleMicView,StopEngineView,SetSosNumbersView,GetSosNumbersView
-from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView,ClearDeviceAlarmLogsView
+from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView,ClearDeviceAlarmLogsView,get_device_odometer,reset_device_odometer
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/auth/register/', RegisterAPI.as_view(), name='auth_register'),
@@ -55,14 +55,17 @@ urlpatterns = [
     path('api/gps/devices/<int:device_id>/trips/', GPSTripListView.as_view(), name='gps-device-trips'),
     path('api/device/<int:device_id>/battery/', get_device_battery_status, name='device_battery'),
     path('api/device/<int:device_id>/full_battery/', get_full_battery_status, name='device_full_battery'),
+    path('api/devices/<int:device_id>/odometer/', get_device_odometer, name='get_device_odometer'),
+    path('api/devices/<int:device_id>/odometer/reset/', reset_device_odometer, name='reset_device_odometer'),
+]
    
-  ]    
+  
 
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add  gps_api/views.py gps_project/urls.py gps_api/models.py 
-# git commit -m " del logs"
+# git commit -m " forgit_pass opt sms"
 #git push origin main
 
 #on Aws

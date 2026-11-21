@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated # اختياري: لحظ�
 from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from requests.auth import HTTPBasicAuth
-from .models import UserProfile,GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken,GPSAlarmLog
+from .models import UserProfile,GPSDevice, DeviceOdometer,SpeedSettings, VibrationSettings, GeofenceSettings,EmergencyNumbers ,OilChangeSettings, OilChangeLog,UserDeviceToken,GPSAlarmLog
 from rest_framework import serializers
 from rest_framework.generics import DestroyAPIView
 from rest_framework.authentication import TokenAuthentication
@@ -21,6 +21,13 @@ from django.conf import settings
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from .serializers import GPSDeviceSerializer,GPSAlarmLogSerializer
 from .permissions import IsDeviceOwner,IsAlarmLogOwner
+from django.db import transaction
+from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from rest_framework.decorators import api_view, permission_classes
+
+
+
 
 
 class LiveGPSLocationAPI(APIView):
@@ -2699,3 +2706,62 @@ def safe_engine_stop(request, device_id):
             
     except requests.exceptions.RequestException as e:
         return JsonResponse({"error": f"Connection to Traccar failed: {str(e)}"}, status=500)
+
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_device_odometer(request, device_id):
+    """جلب الإحصائيات اللحظية (الحالية + الكلية الحية بدون ازدواجية)"""
+    device = get_object_or_404(GPSDevice, id=device_id, user=request.user)
+    odometer, _ = DeviceOdometer.objects.get_or_create(device=device)
+    
+    # تحديث الرقم القياسي للسرعة إذا أرسل التطبيق سرعة حالية أعلى
+    live_speed = float(request.query_params.get('current_speed', 0.0))
+    if live_speed > odometer.max_speed_record:
+        odometer.max_speed_record = live_speed
+        odometer.save(update_fields=['max_speed_record'])
+
+    return Response({
+        "device_id": device.id,
+        "last_reset_at": odometer.last_reset_at,
+        "current_trip": odometer.get_current_trip_stats(),
+        "total_stats": odometer.get_live_total_stats(),
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def reset_device_odometer(request, device_id):
+    """تصفير عداد الرحلة الحالية ونقل قيمتها إلى الأرشيف التراكمي"""
+    device = get_object_or_404(GPSDevice, id=device_id, user=request.user)
+    
+    with transaction.atomic():
+        odometer, _ = DeviceOdometer.objects.select_for_update().get_or_create(device=device)
+        
+        # 1. حساب المسافة والمدة المتراكمة منذ آخر تصفير
+        current = odometer.get_current_trip_stats()
+        
+        # دعم وضع الاختبار الوهمي (إذا أرسل التطبيق مسافة وهمية في الـ Request)
+        simulated_dist = float(request.data.get('simulated_distance', 0.0))
+        simulated_max_speed = float(request.data.get('current_max_speed', 0.0))
+        
+        distance_to_archive = current["distance"] if current["distance"] > 0 else simulated_dist
+        
+        # 2. ترحيل القيم إلى الأرشيف التراكمي
+        odometer.archived_distance = round(odometer.archived_distance + distance_to_archive, 2)
+        odometer.archived_duration += current["duration"]
+        
+        if simulated_max_speed > odometer.max_speed_record:
+            odometer.max_speed_record = simulated_max_speed
+            
+        # 3. تحديث نقطة التصفير الزمنية (تصفر الرحلة الحالية فوراً)
+        odometer.last_reset_at = timezone.now()
+        odometer.save()
+
+    return Response({
+        "status": "success",
+        "message": "تم تصفير عداد الرحلة الحالية وترحيل المسافة إلى الإجمالي بنجاح",
+        "current_trip": odometer.get_current_trip_stats(),   # ستعود 0.0 تلقائياً
+        "total_stats": odometer.get_live_total_stats(),      # ستبقى محتفظة بالرقم الكلي بدون نقصان أو ازدواجية
+    }, status=status.HTTP_200_OK)
