@@ -1035,7 +1035,7 @@ class OilStatusAPI(APIView):
             return Response({"message": "لم يتم تسجيل أي عملية تغيير زيت سابقة لهذا الجهاز حتى الآن"}, status=status.HTTP_200_OK)
 
         # جلب العداد الحالي حياً من تراكار
-        traccar_url = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+        traccar_url = f"{settings.TRACCAR_SERVER_URL}api/positions"
         auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
         
         try:
