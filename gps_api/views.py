@@ -980,7 +980,7 @@ class OilChangeRecordAPI(APIView):
                 total_meters = latest_position.get('attributes', {}).get('totalDistance', 0.0)
                 current_odometer_km = total_meters / 1000.0
             else:
-                return Response({"error": "تعذر جلب قراءة عداد السيارة من سيرفر Traccar لتسجيل العملية"}, status=status.HTTP_502_BAD_GATEWAY)
+                return Response({"error": "تعذر جلب قراءة عداد السيارة من سيرفر Traccar لتسجيل العملية","response":response}, status=status.HTTP_502_BAD_GATEWAY)
         except requests.exceptions.RequestException as e:
             return Response({"error": f"فشل الاتصال بسيرفر تراكار الداخلي: {str(e)}" ,"response":response}, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
