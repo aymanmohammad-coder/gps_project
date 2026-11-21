@@ -25,7 +25,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
-
+from rest_framework.permissions import IsAuthenticated
 
 
 
@@ -972,7 +972,7 @@ class OilChangeRecordAPI(APIView):
         auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
         
         try:
-            response = requests.get(traccar_url, auth=auth_credentials, params={'deviceId': device.traccar_id}, timeout=5.0)
+            response = requests.get(traccar_url, auth=auth_credentials, params={'deviceId': device_id}, timeout=5.0)
             current_odometer_km = 0.0
             if response.status_code == 200 and response.json():
                 latest_position = response.json()[-1]

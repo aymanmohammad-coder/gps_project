@@ -65,7 +65,7 @@ urlpatterns = [
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add  gps_api/views.py gps_project/urls.py gps_api/models.py 
-# git commit -m " forgit_pass opt sms"
+# git commit -m " odometer reset"
 #git push origin main
 
 #on Aws
