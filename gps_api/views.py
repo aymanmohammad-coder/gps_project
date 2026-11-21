@@ -968,7 +968,7 @@ class OilChangeRecordAPI(APIView):
             return Response({"error": "الجهاز غير موجود أو غير مصرح لك بإدارته"}, status=status.HTTP_403_FORBIDDEN)
 
         # 1. جلب قراءة العداد الكلية الحالية (Total Distance) من سيرفر Traccar حياً لتسجيلها
-        traccar_url = f"{settings.TRACCAR_SERVER_URL}/api/positions"
+        traccar_url = f"{settings.TRACCAR_SERVER_URL}api/positions"
         auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
         
         try:
