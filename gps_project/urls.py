@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from gps_api.views import LiveGPSLocationAPI
+from gps_api.views import LiveGPSLocationAPI,ChangePasswordAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
@@ -16,6 +16,7 @@ urlpatterns = [
     path('api/auth/reset-password-confirm/', ResetPasswordConfirmAPI.as_view(), name='reset-password-confirm'),
     path('api/auth/login/', LoginAPI.as_view(), name='auth_login'),
     path('api/auth/logout/', LogoutAPI.as_view(), name='auth_logout'),
+    path('api/auth/change-password/', ChangePasswordAPI.as_view(),name='change_password'),
     # مسار الـ API الجديد الخاص بك
     path('api/gps/live/', LiveGPSLocationAPI.as_view(), name='live-gps-location'),
     path('api/gps/add/', AddGPSDeviceAPI.as_view(), name='add_gps_device'),
@@ -68,7 +69,7 @@ urlpatterns = [
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add  gps_api/views.py gps_api/views_sms.py gps_project/urls.py gps_api/models.py gps_api/utils.py 
-# git commit -m " odometer reset"
+# git commit -m " all update to models devices"
 #git push origin main
 
 #on Aws

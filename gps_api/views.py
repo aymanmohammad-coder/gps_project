@@ -636,68 +636,59 @@ class ResetPasswordConfirmAPI(APIView):
             'username': user.username
         }, status=status.HTTP_200_OK)
 
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
-class RegisterAPI_1(APIView):
-    """
-    API لتسجيل مستخدم جديد في النظام
-    """
+
+
+class ChangePasswordAPI(APIView):
+    """API لتغيير كلمة المرور للمستخدم المسجل"""
+
+    # يجب أن يكون المستخدم مسجلاً للدخول (يرسل التوكين في الهيدر)
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        email = request.data.get('email', '')
+        user = request.user
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        confirm_password = request.data.get('confirm_password')
 
-        if not username or not password:
-            return Response({"error": "اسم المستخدم وكلمة المرور حقول إجبارية"}, status=status.HTTP_400_BAD_REQUEST)
+        # 1. التحقق من إدخال جميع الحقول المطلوبة
+        if not old_password or not new_password or not confirm_password:
+            return Response(
+                {'error': 'جميع الحقول إجبارية (القديمة، الجديدة، وتأكيد الجديدة)'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        if User.objects.filter(username=username).exists():
-            return Response({"error": "اسم المستخدم هذا مأخوذ بالفعل"}, status=status.HTTP_400_BAD_REQUEST)
+        # 2. التحقق من صحة كلمة المرور القديمة
+        if not user.check_password(old_password):
+            return Response(
+                {'error': 'كلمة المرور القديمة غير صحيحة'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        # إنشاء المستخدم وتشفير كلمة المرور تلقائياً
-        user = User.objects.create_user(username=username, password=password, email=email)
-        
-        # إنشاء توكين خاص بالمستخدم الجديد فوراً ليدخل النظام تلقائياً
-        token, _ = Token.objects.get_or_create(user=user)
+        # 3. التحقق من تطابق كلمة المرور الجديدة مع تأكيدها
+        if new_password != confirm_password:
+            return Response(
+                {'error': 'كلمة المرور الجديدة وتأكيدها غير متطابقتين'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        return Response({
-            "message": "تم تسجيل الحساب بنجاح",
-            "token": token.key,
-            "username": user.username
-        }, status=status.HTTP_201_CREATED)
+        # 4. (اختياري وموصى به) التحقق من قوة كلمة المرور حسب إعدادات Django
+        try:
+            validate_password(new_password, user=user)
+        except ValidationError as e:
+            return Response(
+                {'error': list(e.messages)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
+        # 5. حفظ وتشفير كلمة المرور الجديدة
+        user.set_password(new_password)
+        user.save()
 
-class LoginAPI_1(APIView):
-    """
-    API لتسجيل الدخول وإنشاء مفتاح التحقق (Token)
-    """
-    def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-        fcm_token = request.data.get('fcm_token')
-
-        if not username or not password:
-            return Response({"error": "يرجى إدخال اسم المستخدم وكلمة المرور"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # التحقق من صحة البيانات عبر نظام دجانغو الداخلي
-        user = authenticate(username=username, password=password)
-
-        if user is not None:
-            # جلب أو إنشاء التوكين الخاص بهذا المستخدم
-            token, _ = Token.objects.get_or_create(user=user)
-            if fcm_token:
-                # نستخدم update_or_create لضمان عدم تكرار التوكن وتحديثه إذا كان يخص مستخدم آخر أو نفس المستخدم
-                UserDeviceToken.objects.update_or_create(
-                    fcm_token=fcm_token,
-                    defaults={'user': user}
-                )
-            return Response({
-                "message": "تم تسجيل الدخول بنجاح",
-                "uid":user.id,
-                "token": token.key,
-                "username": user.username
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({"error": "بيانات الدخول غير صحيحة، يرجى المحاولة مجدداً"}, status=status.HTTP_401_UNAUTHORIZED)
-
+        return Response(
+            {'message': 'تم تغيير كلمة المرور بنجاح'}, status=status.HTTP_200_OK
+        )
 
 class LogoutAPI(APIView):
     """
