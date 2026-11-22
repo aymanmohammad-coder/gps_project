@@ -17,7 +17,7 @@ from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import authenticate
 from .models import UserProfile, UserDeviceToken
 from .utils import send_textbee_sms
-from django.conf import settings
+
 from rest_framework.generics import RetrieveUpdateDestroyAPIView
 from .serializers import GPSDeviceSerializer,GPSAlarmLogSerializer
 from .permissions import IsDeviceOwner,IsAlarmLogOwner
@@ -715,235 +715,6 @@ class LogoutAPI(APIView):
             return Response({"error": f"حدث خطأ أثناء تسجيل الخروج: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-from django.forms.models import model_to_dict
-
-class DeviceAllSettingsAPI(APIView):
-    """
-    API موحد لإدارة عمليات الـ CRUD لثلاثة جداول إعدادات منفصلة في مسار واحد آمن
-    """
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def _get_user_device(self, user, device_id):
-        """التحقق الأمني من ملكية الجهاز"""
-        try:
-            return GPSDevice.objects.get(user=user, id=device_id)
-        except GPSDevice.DoesNotExist:
-            return None
-    # 1. جلب الإعدادات من الـ 3 جداول معاً (GET)
-        # 1. جلب الإعدادات من الـ 3 جداول معاً (GET)
-    def get(self, request):
-        device_id = request.query_params.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب في الرابط"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالوصول إليه"}, status=status.HTTP_403_FORBIDDEN)
-
-        # الجلب المباشر من الجداول الثلاثة (أضمن وأسرع من getattr)
-        speed = SpeedSettings.objects.filter(device=device).first()
-        vibration = VibrationSettings.objects.filter(device=device).first()
-        geofence_setting = GeofenceSettings.objects.filter(device=device).first()
-
-        return Response({
-            "device_id": device.id,
-            "device_name": device.name,
-            "speed_settings": {
-                "max_speed": speed.max_speed if speed else 120.0,
-                "is_active": speed.is_active if speed else False
-            },
-            "vibration_settings": {
-                "max_vibration": vibration.max_vibration if vibration else 5,
-                "is_active": vibration.is_active if vibration else False
-            },
-            "geofence_settings": { 
-                "geofence_type": geofence_setting.geofence_type if geofence_setting else "circle",
-                "geofence_active": geofence_setting.is_active if geofence_setting else False,
-                
-                # إحداثيات الدائرة
-                "center_latitude": geofence_setting.center_latitude if geofence_setting else None,
-                "center_longitude": geofence_setting.center_longitude if geofence_setting else None,
-                "max_geofence_radius": geofence_setting.max_radius if geofence_setting else None,
-                
-                # إحداثيات المستطيل
-                "ne_latitude": geofence_setting.ne_latitude if geofence_setting else None,
-                "ne_longitude": geofence_setting.ne_longitude if geofence_setting else None,
-                "sw_latitude": geofence_setting.sw_latitude if geofence_setting else None,
-                "sw_longitude": geofence_setting.sw_longitude if geofence_setting else None
-            }
-        }, status=status.HTTP_200_OK)
-
-    # 2. إضافة أو تحديث الإعدادات في الجداول الثلاثة معاً (POST / PUT)
-    # استخدمنا نفس الدالة للإضافة والتعديل تسهيلاً للتعامل مع التطبيق (Upsert Logic)
-    def post(self, request):
-       
-        device_id = request.data.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب في جسم الطلب"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بإدارته"}, status=status.HTTP_403_FORBIDDEN)
-
-        # استقبال المدخلات من الطلب
-        max_speed = request.data.get('max_speed')
-        max_vibration = request.data.get('max_vibration')
-       # max_geofence_radius = request.data.get('max_geofence_radius')
-        
-        # استقبال حالات التفعيل (True/False)
-        speed_active = request.data.get('speed_active', True)
-        vibration_active = request.data.get('vibration_active', True)
-        
-        geofence_type = request.data.get('geofence_type') # 'circle' أو 'polygon'
-        max_geofence_radius = request.data.get('max_geofence_radius')
-        center_lat = request.data.get('center_latitude')
-        center_lng = request.data.get('center_longitude')
-            
-            # إحداثيات المستطيل
-        ne_lat = request.data.get('ne_latitude')
-        ne_lng = request.data.get('ne_longitude')
-        sw_lat = request.data.get('sw_latitude')
-        sw_lng = request.data.get('sw_longitude')
-        geofence_active = request.data.get('geofence_active', True)
-
-        # أ) تحديث أو إنشاء جدول السرعة
-        if max_speed is not None:
-            SpeedSettings.objects.update_or_create(
-                device=device,
-                defaults={'max_speed': max_speed, 'is_active': speed_active}
-            )
-
-        # ب) تحديث أو إنشاء جدول الاهتزاز
-        if max_vibration is not None:
-            VibrationSettings.objects.update_or_create(
-                device=device,
-                defaults={'max_vibration': max_vibration, 'is_active': vibration_active}
-            )
-
-        # ج) تحديث أو إنشاء جدول النطاق الجغرافي
-        saved_geofence_data = None
-        geofence_defaults = None
-        if any([geofence_type, max_geofence_radius, center_lat, center_lng, ne_lat, sw_lat]):
-                geofence_defaults = {
-                    'is_active': geofence_active
-                    }
-                if geofence_type is not None:      geofence_defaults['geofence_type'] = geofence_type
-                if max_geofence_radius is not None: geofence_defaults['max_radius'] = max_geofence_radius
-                if center_lat is not None:         geofence_defaults['center_latitude'] = center_lat
-                if center_lng is not None:         geofence_defaults['center_longitude'] = center_lng
-                if ne_lat is not None:             geofence_defaults['ne_latitude'] = ne_lat
-                if ne_lng is not None:             geofence_defaults['ne_longitude'] = ne_lng
-                if sw_lat is not None:             geofence_defaults['sw_latitude'] = sw_lat
-                if sw_lng is not None:             geofence_defaults['sw_longitude'] = sw_lng
-
-                geofence_obj, created = GeofenceSettings.objects.update_or_create(
-                        device=device,
-                        defaults=geofence_defaults
-                    )
-        saved_geofence_data = model_to_dict(geofence_obj)
-        return Response({ "message": "تم حفظ وتحديث كافة إعدادات الجداول الثلاثة بنجاح",
-                    "saved_geofence": saved_geofence_data,
-                    "sent_defaults": geofence_defaults if saved_geofence_data else None
-                }, status=status.HTTP_200_OK)
-    # 3. حذف وإلغاء تفعيل كافة الإعدادات (DELETE)
-    def delete(self, request):
-        device_id = request.query_params.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بحذف إعداداته"}, status=status.HTTP_403_FORBIDDEN)
-
-        # حذف السجلات من الجداول الثلاثة دفعة واحدة
-        SpeedSettings.objects.filter(device=device).delete()
-        VibrationSettings.objects.filter(device=device).delete()
-        GeofenceSettings.objects.filter(device=device).delete()
-
-        return Response({"message": "تم حذف سجلات الإعدادات من كافة الجداول بنجاح وعاد الجهاز للوضع الافتراضي"}, status=status.HTTP_200_OK)
-
-
-
-class EmergencyNumbersAPI(APIView):
-    """
-    CRUD API: (إضافة، تعديل، جلب، حذف) لأرقام الطوارئ الثلاثة الخاصة بالجهاز عبر الـ Token
-    """
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def _get_user_device(self, user, device_id):
-        """التحقق الأمني من ملكية الجهاز"""
-        try:
-            return GPSDevice.objects.get(user=user, id=device_id)
-        except GPSDevice.DoesNotExist:
-            return None
-
-    # 1. جلب أرقام الطوارئ (GET)
-    def get(self, request):
-        device_id = request.query_params.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب في الرابط"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالوصول إليه"}, status=status.HTTP_403_FORBIDDEN)
-
-        # محاولة جلب السجل أو إرجاع قيم فارغة إن لم تكن منشأة
-        sos_obj = getattr(device, 'emergency_numbers', None)
-
-        return Response({
-            "device_id": device.id,
-            "device_name": device.name,
-            "emergency_numbers": {
-                "sos_number_1": sos_obj.sos_number_1 if sos_obj else None,
-                "sos_number_2": sos_obj.sos_number_2 if sos_obj else None,
-                "sos_number_3": sos_obj.sos_number_3 if sos_obj else None,
-            },
-            "updated_at": sos_obj.updated_at.strftime('%Y-%m-%d %H:%M:%S') if sos_obj else None
-        }, status=status.HTTP_200_OK)
-
-    # 2. إضافة وتعديل ديناميكي (POST)
-    def post(self, request):
-        device_id = request.data.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بإدارته"}, status=status.HTTP_403_FORBIDDEN)
-
-        # جلب السجل الحالي أو التجهيز لإنشاء سجل جديد (Upsert Logic)
-        sos_obj, created = EmergencyNumbers.objects.get_or_create(device=device)
-
-        # التعديل المرن: تحديث الحقل فقط إذا تم إرساله في الطلب (حتى لو أرسلت رقماً واحداً)
-        if 'sos_number_1' in request.data:
-            sos_obj.sos_number_1 = request.data.get('sos_number_1')
-        if 'sos_number_2' in request.data:
-            sos_obj.sos_number_2 = request.data.get('sos_number_2')
-        if 'sos_number_3' in request.data:
-            sos_obj.sos_number_3 = request.data.get('sos_number_3')
-
-        sos_obj.save()
-
-        message = "تم إنشاء أرقام الطوارئ بنجاح" if created else "تم تحديث أرقام الطوارئ بنجاح"
-        return Response({"message": message, "device_id": device.id}, status=status.HTTP_200_OK)
-
-    # 3. حذف أرقام الطوارئ بالكامل (DELETE)
-    def delete(self, request):
-        device_id = request.query_params.get('device_id')
-        if not device_id:
-            return Response({"error": "حقل 'device_id' مطلوب في الرابط"}, status=status.HTTP_400_BAD_REQUEST)
-
-        device = self._get_user_device(request.user, device_id)
-        if not device:
-            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بإدارته"}, status=status.HTTP_403_FORBIDDEN)
-
-        # حذف السجل بالكامل من قاعدة البيانات
-        EmergencyNumbers.objects.filter(device=device).delete()
-        return Response({"message": "تم حذف كافة أرقام الطوارئ بنجاح من قاعدة البيانات"}, status=status.HTTP_200_OK)
-
-
 class OilChangeRecordAPI(APIView):
     """
     API لتسجيل عملية تغيير زيت جديدة وتحديث عداد الصيانة الافتراضي للجهاز
@@ -1099,7 +870,188 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(cred_path)
     firebase_admin.initialize_app(cred)
 
+###########################
+import json
+import math
+from datetime import timedelta
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.utils import timezone
+from firebase_admin import messaging
+from .models import GPSDevice, SpeedSettings, VibrationSettings, GeofenceSettings, GPSAlarmLog, UserDeviceToken
 
+
+def calculate_distance_meters(lat1, lon1, lat2, lon2):
+    """حساب المسافة بالمتر بين نقطتين جغرافيتين (Haversine Formula)"""
+    R = 6371000  # نصف قطر الأرض بالمتر
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+@csrf_exempt
+def traccar_webhook(request):
+    if request.method == 'GET':
+        return JsonResponse({'status': 'success', 'message': 'Webhook endpoint is active'}, status=200)
+        
+    if request.method == 'POST':
+        try:
+            if not request.body:
+                return JsonResponse({'status': 'ignored', 'message': 'Empty body received'}, status=400)
+                
+            data = json.loads(request.body.decode('utf-8'))
+
+            # استخدام (or {}) لمنع خطأ NoneType إذا أرسل Traccar قيماً فارغة
+            event = data.get('event') or {}
+            position = data.get('position') or {}
+            traccar_device_info = data.get('device') or {}
+            
+            event_type = event.get('type', '')
+            pos_attrs = position.get('attributes') or {}
+            evt_attrs = event.get('attributes') or {}
+            attributes = {**pos_attrs, **evt_attrs}  # دمج خصائص الموقع والحدث معاً
+            alarm_type = str(attributes.get('alarm', '')).lower()
+            
+            traccar_id = event.get('deviceId') or traccar_device_info.get('id')
+            if not traccar_id:
+                return JsonResponse({'status': 'ignored', 'message': 'No device ID found'}, status=400)
+            
+            try:
+                device = GPSDevice.objects.get(traccar_id=traccar_id)
+                user = device.user
+            except GPSDevice.DoesNotExist:
+                return JsonResponse({'status': 'ignored', 'message': 'Device not registered in Django'}, status=404)
+            
+            speed_setting = SpeedSettings.objects.filter(device=device).first()
+            vibration_setting = VibrationSettings.objects.filter(device=device).first()
+            geofence_setting = GeofenceSettings.objects.filter(device=device).first()
+
+            raw_speed = position.get('speed')
+            current_speed = round(float(raw_speed) * 1.852, 1) if raw_speed is not None else 0.0
+            current_vibration = attributes.get('vibration', 0) or attributes.get('shock', 0)
+            
+            is_alarm = False
+            save_type = None
+            title = f"تنبيه أمان من: {device.name}"
+            body = ""
+            called_number = None
+
+            # 🚨 [1] فحص استغاثة الطوارئ SOS
+            if event_type == "sos" or alarm_type == "sos":
+                is_alarm = True
+                save_type = 'sos'
+                sos_index = attributes.get('index') or attributes.get('sos_index')
+                if not sos_index:
+                    time_threshold = timezone.now() - timedelta(minutes=3)
+                    recent_sos_count = GPSAlarmLog.objects.filter(device=device, event_type='sos', created_at__gte=time_threshold).count()
+                    sos_index = (recent_sos_count % 3) + 1 
+                called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
+                body = f"🚨 نداء استغاثة SOS فوري! جاري الاتصال بـ {called_number}."
+
+            # 🏃‍♂️ [2] فحص تجاوز السرعة (سواء بحساب السرعة أو بحدث Traccar المباشر)
+            elif speed_setting and speed_setting.is_active and (current_speed > speed_setting.max_speed or event_type == "deviceOverspeed"):
+                is_alarm = True
+                save_type = 'speed'
+                body = f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى المسموح به هو ({speed_setting.max_speed} كم/س)."
+
+            # 📳 [3] فحص الاهتزاز (فقط إذا كان مفعلاً في إعدادات المستخدم)
+            elif vibration_setting and vibration_setting.is_active and (
+                alarm_type in ["vibration", "tampering", "shock", "movement"] or 
+                str(attributes.get('event', '')).lstrip('0') == '1'
+            ):
+                is_alarm = True
+                save_type = 'shock'
+                body = f"📳 تحذير اهتزاز! تم رصد اهتزاز أو محاولة تلاعب بالمركبة ({device.name})."
+
+            # 🗺️ [4] فحص السياج الجغرافي (من حدث Traccar أو بالحساب المباشر للإحداثيات)
+            elif geofence_setting and geofence_setting.is_active:
+                out_of_bounds = (
+                    event_type in ["geofenceExit"] or 
+                    alarm_type in ["geofenceExit", "geofence"] or 
+                    attributes.get('out_geofence', False)
+                )
+                # فحص رياضي إضافي إذا كان السياج دائرياً ومخزناً في Django
+                lat, lon = position.get('latitude'), position.get('longitude')
+                if not out_of_bounds and geofence_setting.geofence_type == "circle" and lat and lon:
+                    if geofence_setting.center_latitude and geofence_setting.center_longitude and geofence_setting.max_radius:
+                        dist_meters = calculate_distance_meters(
+                            lat, lon,
+                            geofence_setting.center_latitude,
+                            geofence_setting.center_longitude
+                        )
+                        if dist_meters > geofence_setting.max_radius:
+                            out_of_bounds = True
+
+                if out_of_bounds:
+                    is_alarm = True
+                    save_type = 'geofence'
+                    body = f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي المسموح به ({geofence_setting.max_radius} متر)."
+
+            # 🔑 [5] فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
+            if not is_alarm and (event_type in ["ignitionOn", "ignitionOff", "alarm"] or alarm_type in ["ignition", "powercut", "poweroff"]):
+                is_alarm = True
+                save_type = 'ignition'
+                if alarm_type in ["powercut", "poweroff"]:
+                    status_text = "تم فصل بطارية / كهرباء الجهاز ⚠️"
+                elif event_type == "ignitionOn" or alarm_type == "ignition":
+                    status_text = "تم تشغيل محرك السيارة 🟢"
+                else:
+                    status_text = "تم إطفاء محرك السيارة 🔴"
+                body = f"حالة المركبة: {status_text}."
+
+            if not is_alarm:
+                return JsonResponse({
+                    'status': 'ignored', 
+                    'message': f'Within safety range (Speed: {current_speed}, Vib: {current_vibration})'
+                }, status=200)
+
+            # 💾 حفظ السجل في قاعدة البيانات
+            GPSAlarmLog.objects.create(
+                device=device,
+                event_type=save_type,
+                title=title,
+                body=body,
+                called_sos_number=called_number,
+                current_speed=current_speed
+            )
+
+            # 🚀 إرسال الإشعار عبر Firebase
+            fcm_tokens = list(UserDeviceToken.objects.filter(user=user).values_list('fcm_token', flat=True))
+            if fcm_tokens:
+                android_settings = messaging.AndroidConfig(
+                    notification=messaging.AndroidNotification(
+                        channel_id=str(save_type).upper(),
+                        click_action="FLUTTER_NOTIFICATION_CLICK",
+                        sound="default"
+                    )
+                )
+                message = messaging.MulticastMessage(
+                    notification=messaging.Notification(title=title, body=body),
+                    data={
+                        "device_id": str(device.id),
+                        "event_type": str(save_type).upper(),
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK"
+                    },
+                    android=android_settings,
+                    tokens=fcm_tokens,
+                )
+                response = messaging.send_each_for_multicast(message)
+                
+                if response.failure_count > 0:
+                    for idx, resp in enumerate(response.responses):
+                        if not resp.success:
+                            err_str = str(resp.exception)
+                            if getattr(resp.exception, 'code', '') == 'invalid-argument' or 'not-registered' in err_str:
+                                UserDeviceToken.objects.filter(fcm_token=fcm_tokens[idx]).delete()
+
+            return JsonResponse({'status': 'success', 'message': 'Alarm evaluated, logged, and notification sent'}, status=200)
+
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+########################
 import json
 import firebase_admin
 from firebase_admin import messaging
@@ -1130,7 +1082,7 @@ import json
 from firebase_admin import messaging
 
 @csrf_exempt
-def traccar_webhook(request):
+def traccar_webhook_11222026(request):
     if request.method == 'GET':
         return JsonResponse({'status': 'success', 'message': 'Webhook endpoint is active'}, status=200)
         
@@ -2461,10 +2413,109 @@ class SyncTraccarTripsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+from rest_framework.views import APIView
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from .models import GPSDevice, GPSTrip
+
+
+class GPSTripListView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _get_user_device(self, user, device_id):
+        """دالة مساعدة للتحقق من وجود الجهاز وملكيته للمستخدم"""
+        try:
+            return GPSDevice.objects.get(id=device_id, user=user)
+        except GPSDevice.DoesNotExist:
+            return None
+
+    # 1. جلب جميع الرحلات (GET)
+    def get(self, request, device_id, trip_id=None):
+        device = self._get_user_device(request.user, device_id)
+        if not device:
+            return Response(
+                {"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        trips = GPSTrip.objects.filter(device=device).order_by('-start_time')
+
+        trips_data = []
+        for trip in trips:
+            trips_data.append({
+                "id": trip.id,
+                "start_location": {"lat": trip.start_lat, "lon": trip.start_lon},
+                "end_location": {"lat": trip.end_lat, "lon": trip.end_lon},
+                "distance_km": trip.distance,
+                "duration_seconds": trip.duration,
+                "duration_minutes": round(trip.duration / 60, 2),
+                "start_time": trip.start_time.strftime('%Y-%m-%d %H:%M:%S'),
+                "end_time": trip.end_time.strftime('%Y-%m-%d %H:%M:%S')
+            })
+
+        return Response({
+            "device_id": device.id,
+            "device_name": device.name,
+            "total_trips_in_db": len(trips_data),
+            "trips": trips_data
+        }, status=status.HTTP_200_OK)
+
+    # 2. حذف رحلة واحدة أو مجموعة رحلات أو الكل (DELETE)
+    def delete(self, request, device_id, trip_id=None):
+        device = self._get_user_device(request.user, device_id)
+        if not device:
+            return Response(
+                {"error": "الجهاز المحدد غير موجود أو غير مصرح لك بالوصول إليه."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # الحالة أ: حذف رحلة واحدة محددة عبر الرابط (URL)
+        if trip_id is not None:
+            deleted_count, _ = GPSTrip.objects.filter(id=trip_id, device=device).delete()
+            if deleted_count == 0:
+                return Response(
+                    {"error": "الرحلة غير موجودة أو تم حذفها مسبقاً."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            return Response({
+                "status": "success",
+                "message": "تم حذف الرحلة بنجاح.",
+                "deleted_count": deleted_count
+            }, status=status.HTTP_200_OK)
+
+        # الحالة ب: حذف مجموعة رحلات محددة عبر قائمة IDs في الجسم (Body)
+        trip_ids = request.data.get("trip_ids")
+        if isinstance(trip_ids, list) and trip_ids:
+            deleted_count, _ = GPSTrip.objects.filter(id__in=trip_ids, device=device).delete()
+            return Response({
+                "status": "success",
+                "message": f"تم حذف ({deleted_count}) رحلة بنجاح.",
+                "deleted_count": deleted_count
+            }, status=status.HTTP_200_OK)
+
+        # الحالة ج: حذف جميع رحلات الجهاز دفعة واحدة (مع شرط تأكيد صريح للحماية)
+        delete_all = str(request.data.get("delete_all", "")).lower() in ["true", "1"]
+        if delete_all:
+            deleted_count, _ = GPSTrip.objects.filter(device=device).delete()
+            return Response({
+                "status": "success",
+                "message": "تم حذف جميع رحلات الجهاز بنجاح.",
+                "deleted_count": deleted_count
+            }, status=status.HTTP_200_OK)
+
+        # في حال إرسال طلب DELETE بدون تحديد رحلة أو تأكيد الحذف الشامل
+        return Response(
+            {"error": "يرجى تمرير رقم الرحلة في الرابط، أو إرسال قائمة 'trip_ids'، أو 'delete_all': true."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
 # -------------------------------------------------------------
 # 2. API عرض سجل الحركة / الرحلات المخزنة لجهاز محدد (GET)
 # -------------------------------------------------------------
-class GPSTripListView(APIView):
+class GPSTripListView_1(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
