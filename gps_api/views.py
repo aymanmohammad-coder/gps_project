@@ -439,6 +439,28 @@ class RegisterAPI(APIView):
         }, status=status.HTTP_201_CREATED)
 
 
+
+class UserProfileAPI(APIView):
+    """
+    API لجلب بيانات الملف الشخصي للمستخدم المسجل حالياً
+    """
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        # جلب البروفايل بأمان دون حدوث خطأ إذا لم يكن منشأً بعد
+        profile = UserProfile.objects.filter(user=user).first()
+
+        return Response({
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "mobile_num": profile.mobile_num if profile else None,
+            "date_joined": user.date_joined.strftime('%Y-%m-%d %H:%M:%S') if user.date_joined else None,
+            "devices_count": user.gps_devices.count()  # معلومة إضافية مفيدة لواجهة البروفايل
+        }, status=status.HTTP_200_OK)
+
 class VerifyOTPAPI(APIView):
     """API للتحقق من كود SMS وتفعيل الحساب"""
     def post(self, request):

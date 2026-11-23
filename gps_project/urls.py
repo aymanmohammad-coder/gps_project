@@ -3,7 +3,7 @@ from django.urls import path
 from gps_api.views import LiveGPSLocationAPI,ChangePasswordAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
-from gps_api.views import RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
+from gps_api.views import UserProfileAPI,RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
 from gps_api.views_sms import DeviceAllSettingsAPI,EngineControlSMSAPI,ToggleMicView,SetSosNumbersView,GetSosNumbersView
@@ -17,6 +17,7 @@ urlpatterns = [
     path('api/auth/login/', LoginAPI.as_view(), name='auth_login'),
     path('api/auth/logout/', LogoutAPI.as_view(), name='auth_logout'),
     path('api/auth/change-password/', ChangePasswordAPI.as_view(),name='change_password'),
+    path('api/auth/profile/', UserProfileAPI.as_view(), name='user_profile'),
     # مسار الـ API الجديد الخاص بك
     path('api/gps/live/', LiveGPSLocationAPI.as_view(), name='live-gps-location'),
     path('api/gps/add/', AddGPSDeviceAPI.as_view(), name='add_gps_device'),
