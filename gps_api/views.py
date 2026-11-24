@@ -962,6 +962,12 @@ def calculate_distance_meters(lat1, lon1, lat2, lon2):
     a = math.sin(dphi / 2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)**2
     return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
+import json
+from django.utils import timezone
+from datetime import timedelta
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from firebase_admin import messaging
 
 @csrf_exempt
 def traccar_webhook(request):
@@ -975,7 +981,6 @@ def traccar_webhook(request):
                 
             data = json.loads(request.body.decode('utf-8'))
 
-            # استخدام (or {}) لمنع خطأ NoneType إذا أرسل Traccar قيماً فارغة
             event = data.get('event') or {}
             position = data.get('position') or {}
             traccar_device_info = data.get('device') or {}
@@ -983,7 +988,7 @@ def traccar_webhook(request):
             event_type = event.get('type', '')
             pos_attrs = position.get('attributes') or {}
             evt_attrs = event.get('attributes') or {}
-            attributes = {**pos_attrs, **evt_attrs}  # دمج خصائص الموقع والحدث معاً
+            attributes = {**pos_attrs, **evt_attrs}
             alarm_type = str(attributes.get('alarm', '')).lower()
             
             traccar_id = event.get('deviceId') or traccar_device_info.get('id')
@@ -1006,9 +1011,15 @@ def traccar_webhook(request):
             
             is_alarm = False
             save_type = None
-            title = f"تنبيه أمان من: {device.name}"
-            body = ""
             called_number = None
+
+            # قاموس العناوين باللغات الثلاث
+            titles = {
+                "ar": f"تنبيه أمان من: {device.name}",
+                "en": f"Security Alert from: {device.name}",
+                "tr": f"Güvenlik Uyarısı: {device.name}"
+            }
+            bodies = {"ar": "", "en": "", "tr": ""}
 
             # 🚨 [1] فحص استغاثة الطوارئ SOS
             if event_type == "sos" or alarm_type == "sos":
@@ -1019,32 +1030,44 @@ def traccar_webhook(request):
                     time_threshold = timezone.now() - timedelta(minutes=3)
                     recent_sos_count = GPSAlarmLog.objects.filter(device=device, event_type='sos', created_at__gte=time_threshold).count()
                     sos_index = (recent_sos_count % 3) + 1 
+                
                 called_number = f"رقم الطوارئ SOS رقم ({sos_index})"
-                body = f"🚨 نداء استغاثة SOS فوري! جاري الاتصال بـ {called_number}."
+                bodies = {
+                    "ar": f"🚨 نداء استغاثة SOS فوري! جاري الاتصال برقم الطوارئ ({sos_index}).",
+                    "en": f"🚨 Immediate SOS Distress Call! Calling emergency number ({sos_index}).",
+                    "tr": f"🚨 Acil SOS Çağrısı! ({sos_index}) numaralı acil durum hattı aranıyor."
+                }
 
-            # 🏃‍♂️ [2] فحص تجاوز السرعة (سواء بحساب السرعة أو بحدث Traccar المباشر)
+            # 🏃‍♂️ [2] فحص تجاوز السرعة
             elif speed_setting and speed_setting.is_active and (current_speed > speed_setting.max_speed or event_type == "deviceOverspeed"):
                 is_alarm = True
                 save_type = 'speed'
-                body = f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى المسموح به هو ({speed_setting.max_speed} كم/س)."
+                bodies = {
+                    "ar": f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى هو ({speed_setting.max_speed} كم/س).",
+                    "en": f"⚠️ Speed Limit Exceeded! Vehicle speed is ({current_speed} km/h), max allowed is ({speed_setting.max_speed} km/h).",
+                    "tr": f"⚠️ Hız Sınırı Aşıldı! Araç hızı ({current_speed} km/s), izin verilen sınır ({speed_setting.max_speed} km/s)."
+                }
 
-            # 📳 [3] فحص الاهتزاز (فقط إذا كان مفعلاً في إعدادات المستخدم)
+            # 📳 [3] فحص الاهتزاز
             elif vibration_setting and vibration_setting.is_active and (
                 alarm_type in ["vibration", "tampering", "shock", "movement"] or 
                 str(attributes.get('event', '')).lstrip('0') == '1'
             ):
                 is_alarm = True
                 save_type = 'shock'
-                body = f"📳 تحذير اهتزاز! تم رصد اهتزاز أو محاولة تلاعب بالمركبة ({device.name})."
+                bodies = {
+                    "ar": f"📳 تحذير اهتزاز! تم رصد اهتزاز أو محاولة تلاعب بالمركبة ({device.name}).",
+                    "en": f"📳 Vibration Warning! Vibration or tampering detected on vehicle ({device.name}).",
+                    "tr": f"📳 Titreşim Uyarısı! ({device.name}) aracında titreşim veya müdahale algılandı."
+                }
 
-            # 🗺️ [4] فحص السياج الجغرافي (من حدث Traccar أو بالحساب المباشر للإحداثيات)
+            # 🗺️ [4] فحص السياج الجغرافي
             elif geofence_setting and geofence_setting.is_active:
                 out_of_bounds = (
                     event_type in ["geofenceExit"] or 
                     alarm_type in ["geofenceExit", "geofence"] or 
                     attributes.get('out_geofence', False)
                 )
-                # فحص رياضي إضافي إذا كان السياج دائرياً ومخزناً في Django
                 lat, lon = position.get('latitude'), position.get('longitude')
                 if not out_of_bounds and geofence_setting.geofence_type == "circle" and lat and lon:
                     if geofence_setting.center_latitude and geofence_setting.center_longitude and geofence_setting.max_radius:
@@ -1059,19 +1082,34 @@ def traccar_webhook(request):
                 if out_of_bounds:
                     is_alarm = True
                     save_type = 'geofence'
-                    body = f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي المسموح به ({geofence_setting.max_radius} متر)."
+                    bodies = {
+                        "ar": f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي المسموح به ({geofence_setting.max_radius} متر).",
+                        "en": f"🗺️ Geofence Exit! Vehicle exited the allowed perimeter ({geofence_setting.max_radius} meters).",
+                        "tr": f"🗺️ Bölge İhlali! Araç izin verilen güvenli alan sınırının ({geofence_setting.max_radius} metre) dışına çıktı."
+                    }
 
             # 🔑 [5] فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
             if not is_alarm and (event_type in ["ignitionOn", "ignitionOff", "alarm"] or alarm_type in ["ignition", "powercut", "poweroff"]):
                 is_alarm = True
                 save_type = 'ignition'
                 if alarm_type in ["powercut", "poweroff"]:
-                    status_text = "تم فصل بطارية / كهرباء الجهاز ⚠️"
+                    bodies = {
+                        "ar": "حالة المركبة: تم فصل بطارية / كهرباء الجهاز ⚠️",
+                        "en": "Vehicle Status: Device power / battery disconnected ⚠️",
+                        "tr": "Araç Durumu: Cihazın elektriği / aküsü kesildi ⚠️"
+                    }
                 elif event_type == "ignitionOn" or alarm_type == "ignition":
-                    status_text = "تم تشغيل محرك السيارة 🟢"
+                    bodies = {
+                        "ar": "حالة المركبة: تم تشغيل محرك السيارة 🟢",
+                        "en": "Vehicle Status: Vehicle engine turned ON 🟢",
+                        "tr": "Araç Durumu: Araç motoru çalıştırıldı 🟢"
+                    }
                 else:
-                    status_text = "تم إطفاء محرك السيارة 🔴"
-                body = f"حالة المركبة: {status_text}."
+                    bodies = {
+                        "ar": "حالة المركبة: تم إطفاء محرك السيارة 🔴",
+                        "en": "Vehicle Status: Vehicle engine turned OFF 🔴",
+                        "tr": "Araç Durumu: Araç motoru durduruldu 🔴"
+                    }
 
             if not is_alarm:
                 return JsonResponse({
@@ -1079,12 +1117,12 @@ def traccar_webhook(request):
                     'message': f'Within safety range (Speed: {current_speed}, Vib: {current_vibration})'
                 }, status=200)
 
-            # 💾 حفظ السجل في قاعدة البيانات
+            # 💾 حفظ السجل في قاعدة البيانات (يمكنك حفظها كـ JSON أو إضافة حقول للغات)
             GPSAlarmLog.objects.create(
                 device=device,
                 event_type=save_type,
-                title=title,
-                body=body,
+                title=json.dumps(titles, ensure_ascii=False), # حفظ اللغات الثلاث
+                body=json.dumps(bodies, ensure_ascii=False),   # حفظ اللغات الثلاث
                 called_sos_number=called_number,
                 current_speed=current_speed
             )
@@ -1100,10 +1138,12 @@ def traccar_webhook(request):
                     )
                 )
                 message = messaging.MulticastMessage(
-                    notification=messaging.Notification(title=title, body=body),
+                    # إرسال Data-only أو إبقاء notification كنسخة احتياطية
                     data={
                         "device_id": str(device.id),
                         "event_type": str(save_type).upper(),
+                        "titles": json.dumps(titles, ensure_ascii=False),
+                        "bodies": json.dumps(bodies, ensure_ascii=False),
                         "click_action": "FLUTTER_NOTIFICATION_CLICK"
                     },
                     android=android_settings,
@@ -1111,17 +1151,21 @@ def traccar_webhook(request):
                 )
                 response = messaging.send_each_for_multicast(message)
                 
+              
                 if response.failure_count > 0:
                     for idx, resp in enumerate(response.responses):
                         if not resp.success:
                             err_str = str(resp.exception)
                             if getattr(resp.exception, 'code', '') == 'invalid-argument' or 'not-registered' in err_str:
-                                UserDeviceToken.objects.filter(fcm_token=fcm_tokens[idx]).delete()
+                                UserDeviceToken.objects.filter(fcm_token=fcm_tokens[idx]).delete() # 32 مسافة (داخل if)
 
-            return JsonResponse({'status': 'success', 'message': 'Alarm evaluated, logged, and notification sent'}, status=200)
+            return JsonResponse({'status': 'success', 'message': 'Alarm evaluated, logged, and notification sent'}, status=200) # 12 مسافة (داخل try)
 
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+        except Exception as e: # 8 مسافات (موازية لـ try)
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500) # 12 مسافة (داخل except)
+            
+    return JsonResponse({'status': 'error', 'message': 'Method not allowed'}, status=405) # 4 مسافات (داخل def)
+
 
 ########################
 import json
