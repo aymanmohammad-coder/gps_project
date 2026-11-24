@@ -190,11 +190,18 @@ class DeviceAllSettingsAPI(APIView):
             sms_logs.append({"setting": "geofence", "active": geofence_active, "success": ok, "detail": res})
 
         # د) في حال جهاز iStartek وتم تفعيل أي من التنبيهات الثلاثة، نؤكد تفعيل الاتصال الهاتفي بأرقام الطوارئ
+                # د) في حال جهاز iStartek وتم تفعيل أي من التنبيهات الثلاثة، نؤكد تفعيل الاتصال لأرقام الطوارئ المسجلة
         if device.model == "Istartek_VT200_L" and any([speed_active, vibration_active, geofence_active]):
-            time.sleep(1.2)
-            ok_call, res_call, _ = dispatch_device_command(device, "enable_call_alerts")
-            sms_logs.append({"setting": "istartek_call_alerts", "success": ok_call, "detail": res_call})
-
+            emergency_obj = EmergencyNumbers.objects.filter(device=device).first()
+            if emergency_obj:
+                # جمع الأرقام المسجلة مع الحفاظ على ترتيبها (1، 2، 3)
+                saved_nums = [emergency_obj.sos_number_1, emergency_obj.sos_number_2, emergency_obj.sos_number_3]
+                for idx, num in enumerate(saved_nums, start=1):
+                    if num:
+                        time.sleep(1.2)
+                        cmd_key = f"enable_call_alerts_{idx}"
+                        ok_call, res_call, _ = dispatch_device_command(device, cmd_key)
+                        sms_logs.append({"setting": f"istartek_call_alert_{idx}", "success": ok_call, "detail": res_call})
         return Response({
             "success": True,
             "message": "تم حفظ الإعدادات وإرسال أوامر التفعيل للجهاز بنجاح.",
@@ -203,7 +210,103 @@ class DeviceAllSettingsAPI(APIView):
             "sms_execution_logs": sms_logs
         }, status=status.HTTP_200_OK)
 
+
+import time
+
 class SetSosNumbersView(APIView):
+    """
+    تعيين أرقام الطوارئ عبر SMS وحفظها محلياً، مع تفعيل الاتصال التلقائي والـ SMS لـ iStartek
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        device = get_object_or_404(GPSDevice, pk=pk, user=request.user)
+        
+        num1 = request.data.get("sos1")
+        num2 = request.data.get("sos2")
+        num3 = request.data.get("sos3")
+        
+        # تنظيف وتنسيق الأرقام المتوفرة فقط مع الحفاظ على ترتيبها (1، 2، 3)
+        raw_numbers = [format_syrian_phone(n) for n in [num1, num2, num3] if n]
+        if not raw_numbers:
+            return Response(
+                {"error": "يجب إدخال رقم طوارئ واحد على الأقل"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        executed_commands = []
+        success_sent_count = 0
+
+        # 1. في حال جهاز iStartek: إرسال الأرقام + تفعيل الاتصال والرسائل لكل رقم تم إدخاله
+        if device.model == "Istartek_VT200_L":
+            phones_to_set = raw_numbers[:3]
+            phones_str = ",".join(phones_to_set)
+            
+            # الخطوة أ: حفظ أرقام الطوارئ في شريحة الجهاز
+            ok, res, _ = dispatch_device_command(device, "sos_set", phones=phones_str)
+            executed_commands.append({"command": "sos_set", "success": ok, "detail": res})
+            
+            if ok:
+                success_sent_count += 1
+                # الخطوة ب: تفعيل الاتصال الهاتفي ورسائل SMS لكل رقم حسب ترتيبه (1, 2, 3)
+                for index in range(1, len(phones_to_set) + 1):
+                    time.sleep(1.5)
+                    # تفعيل الاتصال الهاتفي (SOS، السرعة، السياج، الاهتزاز)
+                    call_cmd_key = f"enable_call_alerts_{index}"
+                    ok_call, res_call, _ = dispatch_device_command(device, call_cmd_key)
+                    executed_commands.append({"command": call_cmd_key, "success": ok_call, "detail": res_call})
+                    
+                    time.sleep(1.5)
+                    # تفعيل رسائل SMS لنفس الأحداث
+                    sms_cmd_key = f"enable_sms_alerts_{index}"
+                    ok_sms, res_sms, _ = dispatch_device_command(device, sms_cmd_key)
+                    executed_commands.append({"command": sms_cmd_key, "success": ok_sms, "detail": res_sms})
+
+        # 2. في حال جهاز Coban: إرسال كل رقم بأمر مستقل (تفعيل تنبيهات SMS الافتراضية)
+        elif device.model == "Copon_303F":
+            for phone in raw_numbers[:3]:
+                ok, res, _ = dispatch_device_command(device, "sos_set", phone=phone)
+                executed_commands.append({"command": f"sos_set ({phone})", "success": ok, "detail": res})
+                if ok:
+                    success_sent_count += 1
+                time.sleep(1.5)
+        else:
+            return Response(
+                {"error": f"نوع الجهاز ({device.model}) غير مدعوم."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if success_sent_count == 0:
+            return Response(
+                {"error": "فشل إرسال رسائل الأوامر بالكامل عبر بوابة Textbee", "details": executed_commands}, 
+                status=status.HTTP_502_BAD_GATEWAY
+            )
+            
+        # حفظ وتحديث البيانات محلياً في جدول EmergencyNumbers
+        emergency_obj, _ = EmergencyNumbers.objects.update_or_create(
+            device=device,
+            defaults={
+                "sos_number_1": num1 if num1 else None,
+                "sos_number_2": num2 if num2 else None,
+                "sos_number_3": num3 if num3 else None,
+            }
+        )
+        
+        return Response({
+            "success": True,
+            "message": "تم ضبط أرقام الطوارئ وتفعيل الاتصال والرسائل لجميع التنبيهات بنجاح.",
+            "device_name": device.name,
+            "device_model": device.model,
+            "executed_commands": executed_commands,
+            "saved_locally": {
+                "sos_number_1": emergency_obj.sos_number_1,
+                "sos_number_2": emergency_obj.sos_number_2,
+                "sos_number_3": emergency_obj.sos_number_3,
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class SetSosNumbersView_1(APIView):
     """
     تعيين أرقام الطوارئ عبر SMS وحفظها محلياً، مع تفعيل الاتصال التلقائي لـ iStartek
     """
@@ -447,77 +550,3 @@ class EngineControlSMSAPI(APIView):
                 "details": result
             }, status=status.HTTP_502_BAD_GATEWAY)
 
-
-class EngineControlSMSAPI_aa(APIView):
-    """
-    API لإيقاف وتشغيل المحرك عبر SMS بناءً على نوع الجهاز (Copon_303F أو Istartek_VT200_L)
-    """
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        device_id = request.data.get('device_id')
-        action = str(request.data.get('action', '')).strip().lower()  # 'stop' أو 'resume'
-
-        if not device_id or action not in ['stop', 'resume']:
-            return Response(
-                {"error": "يرجى إرسال 'device_id' وتحديد 'action' بقيمة 'stop' للإيقاف أو 'resume' للتشغيل."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 1. جلب الجهاز والتأكد من ملكيته للمستخدم الحالي
-        device = get_object_or_404(GPSDevice, id=device_id, user=request.user)
-
-        # 2. التحقق من وجود رقم شريحة مسجل للجهاز
-        if not device.phone_number:
-            return Response(
-                {"error": "لا يوجد رقم شريحة (phone_number) مسجل لهذا الجهاز."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # 3. تنسيق رقم الهاتف بصيغة دولية (+963...) لتقبله بوابة Textbee
-        phone = device.phone_number.strip()
-        if phone.startswith('09'):
-            phone = '+963' + phone[1:]
-        elif not phone.startswith('+'):
-            phone = '+' + phone
-
-        # 4. تحديد كود الـ SMS بناءً على موديل الجهاز والأمر المطلوب
-        commands_map = {
-            'Copon_303F': {
-                'stop': 'stop123456',
-                'resume': 'resume123456',
-            },
-            'Istartek_VT200_L': {
-                'stop': '0000,900,1,1',
-                'resume': '0000,900,1,0',
-            }
-        }
-
-        device_commands = commands_map.get(device.model)
-        if not device_commands:
-            return Response(
-                {"error": f"نوع الجهاز ({device.model}) غير مدعوم لأوامر التحكم بالمحرك."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        sms_command = device_commands[action]
-
-        # 5. إرسال الرسالة عبر بوابة Textbee
-        success, result = send_textbee_sms([phone], sms_command)
-
-        if success:
-            action_ar = "إيقاف المحرك" if action == "stop" else "تشغيل المحرك"
-            return Response({
-                "status": "success",
-                "message": f"تم إرسال أمر {action_ar} بنجاح إلى الجهاز ({device.name})",
-                "device_model": device.model,
-                "sent_to": phone,
-                "command": sms_command,
-                "gateway_response": result
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                "error": "فشل إرسال رسالة التحكم عبر بوابة SMS",
-                "details": result
-            }, status=status.HTTP_502_BAD_GATEWAY)
