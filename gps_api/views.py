@@ -154,6 +154,7 @@ def run_initial_device_setup(device):
             ("init_gprs", {}),
             ("init_fix", {}),
             ("shock_on", {}),  # <-- تفعيل تنبيه الاهتزاز تلقائياً
+            ("acc_on", {}),    # <-- تفعيل تنبيه تشغيل/إطفاء المحرك
         ]
     elif device.model == "Istartek_VT200_L":
         commands_sequence = [
@@ -162,6 +163,8 @@ def run_initial_device_setup(device):
             ("init_interval", {}),
             ("init_timezone", {}),
             ("shock_on", {}),  # <-- تفعيل تنبيه الاهتزاز تلقائياً
+            ("acc_on", {}),    # <-- تفعيل إرسال أحداث المحرك للسيرفر
+
         ]
     else:
         return
@@ -1259,27 +1262,31 @@ def traccar_webhook(request):
                         }
 
             # 🔑 [5] فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
+                        # 🔑 فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
             if not is_alarm and (event_type in ["ignitionOn", "ignitionOff", "alarm"] or alarm_type in ["ignition", "powercut", "poweroff"]):
-                is_alarm = True
-                save_type = 'ignition'
                 if alarm_type in ["powercut", "poweroff"]:
+                    is_alarm = True
+                    save_type = 'ignition'
                     bodies = {
                         "ar": "حالة المركبة: تم فصل بطارية / كهرباء الجهاز ⚠️",
                         "en": "Vehicle Status: Device power / battery disconnected ⚠️",
                         "tr": "Araç Durumu: Cihazın elektriği / aküsü kesildi ⚠️"
                     }
-                elif event_type == "ignitionOn" or alarm_type == "ignition":
-                    bodies = {
-                        "ar": "حالة المركبة: تم تشغيل محرك السيارة 🟢",
-                        "en": "Vehicle Status: Vehicle engine turned ON 🟢",
-                        "tr": "Araç Durumu: Araç motoru çalıştırıldı 🟢"
-                    }
-                else:
-                    bodies = {
-                        "ar": "حالة المركبة: تم إطفاء محرك السيارة 🔴",
-                        "en": "Vehicle Status: Vehicle engine turned OFF 🔴",
-                        "tr": "Araç Durumu: Araç motoru durduruldu 🔴"
-                    }
+                elif device.acc_alert_active:  # <-- يرسل إشعار تشغيل/إطفاء المحرك فقط إذا كان المفتاح مفعلاً
+                    is_alarm = True
+                    save_type = 'ignition'
+                    if event_type == "ignitionOn" or alarm_type == "ignition":
+                        bodies = {
+                            "ar": "حالة المركبة: تم تشغيل محرك السيارة 🟢",
+                            "en": "Vehicle Status: Vehicle engine turned ON 🟢",
+                            "tr": "Araç Durumu: Araç motoru çalıştırıldı 🟢"
+                        }
+                    else:
+                        bodies = {
+                            "ar": "حالة المركبة: تم إطفاء محرك السيارة 🔴",
+                            "en": "Vehicle Status: Vehicle engine turned OFF 🔴",
+                            "tr": "Araç Durumu: Araç motoru durduruldu 🔴"
+                        }
 
             if not is_alarm:
                 return JsonResponse({

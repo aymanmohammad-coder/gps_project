@@ -38,6 +38,9 @@ class GPSDevice(models.Model):
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     expiration_date = models.DateTimeField(default=get_default_expiration, verbose_name="expiration date")
     pin_code = models.CharField(max_length=128, blank=True, null=True)
+    is_acc_cut = models.BooleanField(default=False, help_text="True = المحرك مقطوع، False = المحرك موصول")
+    acc_alert_active = models.BooleanField(default=True, help_text="تفعيل أو إلغاء تنبيه تشغيل/إطفاء المحرك ACC")
+    is_engine_stopped = models.BooleanField(default=False, help_text="حالة إيقاف المحرك عن بعد")
     created_at = models.DateTimeField(auto_now_add=True)
     @property
     def days_left(self):

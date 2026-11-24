@@ -6,7 +6,7 @@ from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCode
 from gps_api.views import UserProfileAPI,RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
 from gps_api.views import SyncTraccarTripsView, GPSTripListView,get_full_battery_status,get_device_battery_status,safe_engine_stop
-from gps_api.views_sms import DeviceAllSettingsAPI,EngineControlSMSAPI,ToggleMicView,SetSosNumbersView,GetSosNumbersView
+from gps_api.views_sms import AccControlAPI,DeviceAllSettingsAPI,EngineControlSMSAPI,ToggleMicView,SetSosNumbersView,GetSosNumbersView
 from gps_api.views import GPSDeviceDetailAPIView,DeleteGPSAlarmLogAPIView,ClearDeviceAlarmLogsView,get_device_odometer,reset_device_odometer
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -65,6 +65,8 @@ urlpatterns = [
     path('api/devices/<int:device_id>/trips/', GPSTripListView.as_view(), name='device_trips'),
     # مسار حذف رحلة واحدة محددة
     path('api/devices/<int:device_id>/trips/<int:trip_id>/', GPSTripListView.as_view(), name='delete_single_trip'),
+     path('api/device/acc-control/', AccControlAPI.as_view(), name='acc-control'),
+
 ]
   
 
@@ -83,7 +85,8 @@ urlpatterns = [
 
 #add limted device 
 # add fcm 
+# python manage.py shell -c "from gps_api.models import GPSDevice; print(GPSDevice.objects.all().delete())"
 
 
 #   869706066596387 
-#
+#   864731080849339   Istartek_VT200_L

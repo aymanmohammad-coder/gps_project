@@ -80,6 +80,9 @@ class DeviceAllSettingsAPI(APIView):
             "device_id": device.id,
             "device_name": device.name,
             "device_model": device.model,
+            "acc_settings": {
+                "is_active": device.acc_alert_active  # <-- حالة تنبيه المحرك ACC
+            },
             "speed_settings": {
                 "max_speed": speed.max_speed if speed else 120.0,
                 "is_active": speed.is_active if speed else False
@@ -127,6 +130,18 @@ class DeviceAllSettingsAPI(APIView):
         geofence_active = str(request.data.get('geofence_active', True)).lower() in ['true', '1']
 
         sms_logs = []
+        # أ) تحديث تنبيه المحرك (ACC) وإرسال أمر SMS للجهاز فقط إذا تم إرسال الحقل في الطلب
+        if 'acc_active' in request.data:
+            acc_active = str(request.data.get('acc_active')).lower() in ['true', '1']
+            device.acc_alert_active = acc_active
+            device.save(update_fields=['acc_alert_active'])
+            
+            if acc_active:
+                ok, res, _ = dispatch_device_command(device, "acc_on")
+            else:
+                ok, res, _ = dispatch_device_command(device, "acc_off")
+            sms_logs.append({"setting": "acc", "active": acc_active, "success": ok, "detail": res})
+            time.sleep(1.2)
 
         # أ) تحديث السرعة وإرسال أمر SMS للجهاز
         if max_speed is not None:
@@ -430,6 +445,123 @@ class GetSosNumbersView(APIView):
 
 ###############################
 from django.contrib.auth.hashers import  check_password
+
+
+class AccControlAPI(APIView):
+    """
+    API لزر التحكم في قطع ووصل ACC (محرك/كهرباء السيارة) عن بعد
+    """
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # 1. جلب حالة الزر الحالية عند فتح الشاشة في التطبيق
+    def get(self, request):
+        device_id = request.query_params.get('device_id')
+        if not device_id:
+            return Response({"error": "حقل 'device_id' مطلوب"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            device = GPSDevice.objects.get(id=device_id, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو غير مصرح لك به"}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({
+            "device_id": device.id,
+            "device_name": device.name,
+            "is_acc_cut": device.is_acc_cut,  # True: مقطوع | False: موصول
+            "status_text": "مقطوع" if device.is_acc_cut else "موصول"
+        }, status=status.HTTP_200_OK)
+
+    # 2. تنفيذ أمر القطع (cut) أو الوصل (connect) عند ضغط الزر
+    def post(self, request):
+        device_id = request.data.get('device_id')
+        action = str(request.data.get('action', '')).strip().lower()  # 'cut' أو 'connect'
+
+        if not device_id or action not in ['cut', 'connect']:
+            return Response({
+                "error": "يرجى إرسال 'device_id' وتحديد 'action' إما 'cut' (قطع) أو 'connect' (وصل)."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            device = GPSDevice.objects.get(id=device_id, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({"error": "الجهاز غير موجود أو غير مصرح لك بالتحكم به"}, status=status.HTTP_403_FORBIDDEN)
+
+        # ربط الأكشن بمفاتيح الأوامر الموجودة في DEVICE_SMS_COMMANDS بملف utils.py
+        command_key = "stop" if action == "cut" else "resume"
+
+        success, result, http_code = dispatch_device_command(device, command_key)
+
+        if not success:
+            return Response({
+                "success": False,
+                "error": "فشل إرسال أمر الـ SMS إلى شريحة الجهاز.",
+                "detail": result
+            }, status=http_code)
+
+        # تحديث الحالة في قاعدة البيانات
+        device.is_acc_cut = (action == "cut")
+        device.save(update_fields=['is_acc_cut'])
+
+        return Response({
+            "success": True,
+            "message": "تم إرسال أمر قطع ACC بنجاح." if device.is_acc_cut else "تم إرسال أمر وصل ACC بنجاح.",
+            "device_id": device.id,
+            "action": action,
+            "is_acc_cut": device.is_acc_cut,
+            "gateway_detail": result
+        }, status=status.HTTP_200_OK)
+
+class EngineControlAPI(APIView):
+    """
+    API للتحكم في فصل (إيقاف) ووصل (تشغيل) محرك السيارة عن بعد عبر SMS
+    """
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        device_id = request.data.get('device_id')
+        action = str(request.data.get('action', '')).strip().lower()  # القيم المتوقعة: 'stop' أو 'resume'
+
+        if not device_id or action not in ['stop', 'resume']:
+            return Response({
+                "error": "يرجى إرسال 'device_id' وتحديد 'action' إما 'stop' (لفصل المحرك) أو 'resume' (لوصل المحرك)."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            device = GPSDevice.objects.get(id=device_id, user=request.user)
+        except GPSDevice.DoesNotExist:
+            return Response({
+                "error": "الجهاز غير موجود أو غير مصرح لك بالتحكم به."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # إرسال الأمر عبر دالة dispatch_device_command الموجودة في utils.py
+        # مفاتيح الأوامر 'stop' و 'resume' معرفة مسبقاً لكل من Copon_303F و Istartek_VT200_L
+        success, result, http_code = dispatch_device_command(device, action)
+
+        if not success:
+            return Response({
+                "success": False,
+                "error": "فشل إرسال أمر التحكم إلى شريحة الجهاز.",
+                "detail": result
+            }, status=http_code)
+
+        # تحديث حالة المحرك في قاعدة البيانات
+        is_stopped = (action == 'stop')
+        device.is_engine_stopped = is_stopped
+        device.save(update_fields=['is_engine_stopped'])
+
+        message_ar = "تم إرسال أمر فصل (إيقاف) المحرك بنجاح." if is_stopped else "تم إرسال أمر وصل (إعادة تشغيل) المحرك بنجاح."
+
+        return Response({
+            "success": True,
+            "message": message_ar,
+            "device_id": device.id,
+            "device_name": device.name,
+            "action": action,
+            "is_engine_stopped": device.is_engine_stopped,
+            "gateway_detail": result
+        }, status=status.HTTP_200_OK)
 
 class EngineControlSMSAPI(APIView):
     """
