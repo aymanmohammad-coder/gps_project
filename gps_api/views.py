@@ -122,8 +122,156 @@ class LiveGPSLocationAPI(APIView):
             return Response({"error": f"تعذر الاتصال بخادم Traccar الخارجي: {str(e)}"}, status=status.HTTP_504_GATEWAY_TIMEOUT)
 
 
+import threading
+import time
+import requests
+from datetime import timedelta
+from django.conf import settings
+from django.utils import timezone
+from .utils import dispatch_device_command
+
+
+def run_initial_device_setup(device):
+    """دالة تعمل في الخلفية لإرسال رسائل التهيئة وتفعيل الاهتزاز تلقائياً دون تأخير رد الـ API"""
+    if not device.phone_number:
+        return
+
+    server_ip = getattr(settings, 'TRACCAR_SERVER_IP', 'YOUR_SERVER_IP')
+    
+    # تحديد الـ APN تلقائياً حسب شبكة الشريحة السورية
+    clean_phone = str(device.phone_number).replace("+963", "0").strip()
+    if clean_phone.startswith(("094", "095", "096")):
+        apn = "internet"          # MTN Syria
+    else:
+        apn = "://syriatel.com"  # Syriatel
+
+    if device.model == "Copon_303F":
+        commands_sequence = [
+            ("init_begin", {}),
+            ("init_timezone", {}),
+            ("init_apn", {"apn": apn}),
+            ("init_ip", {"ip": server_ip, "port": 5001}),
+            ("init_gprs", {}),
+            ("init_fix", {}),
+            ("shock_on", {}),  # <-- تفعيل تنبيه الاهتزاز تلقائياً
+        ]
+    elif device.model == "Istartek_VT200_L":
+        commands_sequence = [
+            ("init_apn", {"apn": apn}),
+            ("init_ip", {"ip": server_ip, "port": 5222}),
+            ("init_interval", {}),
+            ("init_timezone", {}),
+            ("shock_on", {}),  # <-- تفعيل تنبيه الاهتزاز تلقائياً
+        ]
+    else:
+        return
+
+    for cmd_key, params in commands_sequence:
+        dispatch_device_command(device, cmd_key, **params)
+        time.sleep(2.5)
 
 class AddGPSDeviceAPI(APIView):
+    """
+    API لإضافة جهاز جديد إلى خادم Traccar وقاعدة بيانات دجانغو وإرسال رسائل التهيئة تلقائياً
+    """
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        name = request.data.get('name')
+        imei = request.data.get('imei')
+        model = request.data.get('model')
+        phone = request.data.get('phone_number', None)
+        category = request.data.get('category', 'car')
+
+        if not name or not imei:
+            return Response({"error": "الحقول 'name' و 'imei' مطلوبة بشكل إجباري"}, status=status.HTTP_400_BAD_REQUEST)
+
+        target_user = request.user
+
+        if GPSDevice.objects.filter(imei=imei).exists():
+            return Response({"error": "هذا الجهاز (IMEI) مضاف بالفعل في النظام المحلي"}, status=status.HTTP_400_BAD_REQUEST)
+
+        expiration_date = timezone.now() + timedelta(days=180)
+        base_url = settings.TRACCAR_SERVER_URL
+        if not base_url.endswith('/'):
+            base_url += '/'
+        devices_url = f"{base_url}api/devices"
+        auth_credentials = (settings.TRACCAR_USER, settings.TRACCAR_PASSWORD)
+
+        traccar_payload = {
+            "name": name,
+            "uniqueId": imei,
+            "model": model,
+            "phone": phone,
+            "category": category,
+            "expirationTime": expiration_date.isoformat()
+        }
+
+        try:
+            traccar_response = requests.post(
+                devices_url,
+                auth=auth_credentials,
+                json=traccar_payload,
+                timeout=5.0
+            )
+
+            if traccar_response.status_code in[200,201]:
+                traccar_data = traccar_response.json()
+                assigned_traccar_id = traccar_data.get('id')
+
+                if GPSDevice.objects.filter(id=assigned_traccar_id).exists():
+                    return Response({"error": f"معرف الجهاز (ID: {assigned_traccar_id}) محجوز مسبقاً في النظام المحلي"}, status=status.HTTP_409_CONFLICT)
+
+                # 1. حفظ الجهاز محلياً
+                local_device = GPSDevice.objects.create(
+                    id=assigned_traccar_id,
+                    user=target_user,
+                    name=name,
+                    imei=imei,
+                    traccar_id=assigned_traccar_id,
+                    model=model,
+                    phone_number=phone,
+                    expiration_date=expiration_date
+                )
+
+                # 2. إنشاء السجلات الافتراضية للإعدادات في قاعدة البيانات
+                SpeedSettings.objects.get_or_create(device=local_device, defaults={'max_speed': 120.0, 'is_active': True})
+                VibrationSettings.objects.get_or_create(device=local_device, defaults={'max_vibration': 5, 'is_active': True})
+                GeofenceSettings.objects.get_or_create(device=local_device, defaults={'is_active': True})
+
+                # 3. بدء إرسال رسائل ربط الـ IP والتهيئة في الخلفية (إذا كان رقم الشريحة مدخلاً)
+                sms_started = False
+                if phone and model in ["Copon_303F", "Istartek_VT200_L"]:
+                    threading.Thread(target=run_initial_device_setup, args=(local_device,), daemon=True).start()
+                    sms_started = True
+
+                return Response({
+                    "message": "تم إضافة الجهاز بنجاح وبدأ إرسال رسائل التهيئة وربط السيرفر تلقائياً",
+                    "sms_setup_triggered": sms_started,
+                    "user_associated": {
+                        "user_id": target_user.id,
+                        "username": target_user.username
+                    },
+                    "local_id": local_device.id,
+                    "traccar_id": assigned_traccar_id,
+                    "expiration_date": local_device.expiration_date.strftime('%Y-%m-%d %H:%M:%S'),
+                    "device_details": traccar_data
+                }, status=status.HTTP_201_CREATED)
+
+            else:
+                return Response({
+                    "error": "فشل إضافة الجهاز في خادم Traccar الخارجي",
+                    "status_code": traccar_response.status_code,
+                    "traccar_error": traccar_response.text
+                }, status=status.HTTP_502_BAD_GATEWAY)
+
+        except requests.exceptions.RequestException as e:
+            return Response({
+                "error": f"تعذر الاتصال بخادم Traccar الخارجي لإتمام الإضافة: {str(e)}"
+            }, status=status.HTTP_504_GATEWAY_TIMEOUT)
+
+class AddGPSDeviceAPI____a(APIView):
     """
     API لإضافة جهاز جديد إلى خادم Traccar وقاعدة بيانات دجانغو المحلية معاً بالاعتماد على Token المستخدم
     """
@@ -308,7 +456,7 @@ class GPSDeviceDetailAPIView(RetrieveUpdateDestroyAPIView):
                 timeout=5.0
             )
 
-            if traccar_response.status_code ==200:
+            if traccar_response.status_code in [200, 204, 404]:
                 device_id = device.id
                 device.delete()
                 
