@@ -27,6 +27,9 @@ from django.shortcuts import get_object_or_404
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 
+from .models import VehicleLicense, GPSDevice
+from .serializers import VehicleLicenseSerializer
+
 
 
 
@@ -726,6 +729,62 @@ class LogoutAPI(APIView):
             return Response({"message": "تم تسجيل الخروج وحذف التوكين بنجاح"}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": f"حدث خطأ أثناء تسجيل الخروج: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+
+class VehicleLicenseAPI(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    # 1. جلب بيانات الرخصة والأيام المتبقية (GET)
+    def get(self, request):
+        device_pk = request.query_params.get('device_id')
+        if not device_pk:
+            return Response(
+                {"error": "يرجى تزويدنا بمعرف الجهاز (device)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        license_obj = get_object_or_404(VehicleLicense, device_id=device_pk)
+        serializer = VehicleLicenseSerializer(license_obj)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    # 2. إضافة بيانات الرخصة لجهاز (POST)
+    def post(self, request):
+        serializer = VehicleLicenseSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                {
+                    "message": "تم إضافة بيانات الرخصة بنجاح",
+                    "data": serializer.data
+                },
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    # 3. تعديل تاريخ الرخصة أو رقم اللوحة (PATCH)
+    def patch(self, request):
+        device_pk = request.data.get('device_id') or request.query_params.get('device_id')
+        if not device_pk:
+            return Response(
+                {"error": "يرجى إرسال معرف الجهاز (device) لتحديد الرخصة المراد تعديلها"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        license_obj = get_object_or_404(VehicleLicense, device_id=device_pk)
+        serializer = VehicleLicenseSerializer(license_obj, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                {
+                    "message": "تم تحديث بيانات الرخصة بنجاح",
+                    "data": serializer.data
+                },
+                status=status.HTTP_200_OK
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class OilChangeRecordAPI(APIView):

@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.urls import path
 from gps_api.views import LiveGPSLocationAPI,ChangePasswordAPI
-from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI
+from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,VehicleLicenseAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import UserProfileAPI,RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
 from gps_api.views import  traccar_webhook ,GPSAlarmLogListView,GPSAlarmLogDeviceListView
@@ -27,6 +27,8 @@ urlpatterns = [
     path('api/gps/oil/change/', OilChangeRecordAPI.as_view(), name='record-oil-change'),
     path('api/gps/oil/status/', OilStatusAPI.as_view(), name='get-oil-status'),
     path('api/traccar/webhook/',traccar_webhook, name='traccar_webhook'),
+    path('api/gps/vehicle-license/', VehicleLicenseAPI.as_view(), name='vehicle-license'),
+
     
     path('api/gps/<int:pk>/toggle-mic/', ToggleMicView.as_view(), name='toggle-mic'),
     path('api/gps/<int:pk>/set-sos/', SetSosNumbersView.as_view(), name='set-sos'),
@@ -69,8 +71,8 @@ urlpatterns = [
     #Token bf1a6f59a1d9b3a2a09b887668c05e9e5aca88bf
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
-#/  git add  gps_api/views.py gps_api/views_sms.py gps_project/urls.py gps_api/models.py gps_api/utils.py 
-# git commit -m " all update to models devices"
+#/  git add  gps_api/views.py gps_api/views_sms.py gps_project/urls.py gps_api/models.py gps_api/serializers.py 
+# git commit -m " all update to models devices profile"
 #git push origin main
 
 #on Aws

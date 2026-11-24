@@ -53,7 +53,35 @@ class GPSDevice(models.Model):
 
 
 
+from django.db import models
+from django.utils import timezone
 
+class VehicleLicense(models.Model):
+    device = models.OneToOneField(
+        GPSDevice, 
+        on_delete=models.CASCADE, 
+        related_name="VehicleLicense_setting"
+    )
+    plate_number = models.CharField(max_length=50, blank=True, null=True, verbose_name="رقم اللوحة")
+    license_expiry_date = models.DateField(verbose_name="تاريخ انتهاء الرخصة")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @property
+    def days_remaining(self):
+        today = timezone.now().date()
+        return (self.license_expiry_date - today).days
+
+    @property
+    def license_status(self):
+        days = self.days_remaining
+        if days < 0:
+            return "expired"       # منتهية
+        elif days <= 30:
+            return "expiring_soon" # قاربت على الانتهاء
+        return "valid"             # سارية المفعول
+
+    def __str__(self):
+        return f"{self.device} - Expires: {self.license_expiry_date}"
 
 # 1. جدول إعدادات تنبيه السرعة الزائدة
 class SpeedSettings(models.Model):
