@@ -74,7 +74,7 @@ urlpatterns = [
 #   key     AIzaSyDCdEIDkw__SjwIdfaChCbhCCG_AA-YmQc
 # git status
 #/  git add  gps_api/utils.py gps_api/views.py gps_api/views_sms.py gps_project/urls.py gps_api/models.py gps_api/serializers.py  gps_project/settings.py
-# git commit -m " all update to models devices profile"
+# git commit -m " all update notif ar en tr"
 #git push origin main
 
 #on Aws

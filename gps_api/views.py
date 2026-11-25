@@ -1172,7 +1172,7 @@ def traccar_webhook(request):
             }
             bodies = {"ar": "", "en": "", "tr": ""}
 
-            # 🚨 [1] فحص استغاثة الطوارئ SOS
+                        # 🚨 [1] فحص استغاثة الطوارئ SOS (أولوية قصوى)
             if event_type == "sos" or alarm_type == "sos":
                 is_alarm = True
                 save_type = 'sos'
@@ -1189,81 +1189,8 @@ def traccar_webhook(request):
                     "tr": f"🚨 Acil SOS Çağrısı! ({sos_index}) numaralı acil durum hattı aranıyor."
                 }
 
-            # 🏃‍♂️ [2] فحص تجاوز السرعة
-            elif speed_setting and speed_setting.is_active and (current_speed > speed_setting.max_speed or event_type == "deviceOverspeed"):
-                is_alarm = True
-                save_type = 'speed'
-                bodies = {
-                    "ar": f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى هو ({speed_setting.max_speed} كم/س).",
-                    "en": f"⚠️ Speed Limit Exceeded! Vehicle speed is ({current_speed} km/h), max allowed is ({speed_setting.max_speed} km/h).",
-                    "tr": f"⚠️ Hız Sınırı Aşıldı! Araç hızı ({current_speed} km/s), izin verilen sınır ({speed_setting.max_speed} km/s)."
-                }
-
-            # 📳 [3] فحص الاهتزاز
-            elif vibration_setting and vibration_setting.is_active and (
-                alarm_type in ["vibration", "tampering", "shock", "movement"] or 
-                str(attributes.get('event', '')).lstrip('0') == '1'
-            ):
-                is_alarm = True
-                save_type = 'shock'
-                bodies = {
-                    "ar": f"📳 تحذير اهتزاز! تم رصد اهتزاز أو محاولة تلاعب بالمركبة ({device.name}).",
-                    "en": f"📳 Vibration Warning! Vibration or tampering detected on vehicle ({device.name}).",
-                    "tr": f"📳 Titreşim Uyarısı! ({device.name}) aracında titreşim veya müdahale algılandı."
-                }
-
-                        # 🗺️ فحص السياج الجغرافي (دائري ومستطيل)
-            elif geofence_setting and geofence_setting.is_active:
-                out_of_bounds = (
-                    event_type in ["geofenceExit"] or 
-                    alarm_type in ["geofenceExit", "geofence"] or 
-                    attributes.get('out_geofence', False)
-                )
-                
-                lat, lon = position.get('latitude'), position.get('longitude')
-                
-                if not out_of_bounds and lat is not None and lon is not None:
-                    # 1. فحص السياج الدائري
-                    if geofence_setting.geofence_type == "circle":
-                        if geofence_setting.center_latitude and geofence_setting.center_longitude and geofence_setting.max_radius:
-                            dist_meters = calculate_distance_meters(
-                                lat, lon,
-                                geofence_setting.center_latitude,
-                                geofence_setting.center_longitude
-                            )
-                            if dist_meters > geofence_setting.max_radius:
-                                out_of_bounds = True
-                                
-                    # 2. فحص السياج المستطيل (الشمال الشرقي NE والجنوب الغربي SW)
-                    elif geofence_setting.geofence_type == "rectangle":
-                        if all([geofence_setting.ne_latitude, geofence_setting.ne_longitude, 
-                                geofence_setting.sw_latitude, geofence_setting.sw_longitude]):
-                            # التحقق مما إذا كانت السيارة خارج حدود خطوط الطول أو العرض للمستطيل
-                            is_outside_lat = not (geofence_setting.sw_latitude <= lat <= geofence_setting.ne_latitude)
-                            is_outside_lon = not (geofence_setting.sw_longitude <= lon <= geofence_setting.ne_longitude)
-                            if is_outside_lat or is_outside_lon:
-                                out_of_bounds = True
-
-                if out_of_bounds:
-                    is_alarm = True
-                    save_type = 'geofence'
-                    # تخصيص النص حسب نوع السياج (دائري بمسافة أو مستطيل بدون مسافة)
-                    if geofence_setting.geofence_type == "circle" and geofence_setting.max_radius:
-                        bodies = {
-                            "ar": f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي المسموح به ({geofence_setting.max_radius} متر).",
-                            "en": f"🗺️ Geofence Exit! Vehicle exited the allowed perimeter ({geofence_setting.max_radius} meters).",
-                            "tr": f"🗺️ Bölge İhlali! Araç izin verilen güvenli alan sınırının ({geofence_setting.max_radius} metre) dışına çıktı."
-                        }
-                    else:
-                        bodies = {
-                            "ar": "🗺️ تجاوز النطاق! خرجت السيارة عن حدود المنطقة الجغرافية المحددة.",
-                            "en": "🗺️ Geofence Exit! Vehicle exited the designated geographic zone.",
-                            "tr": "🗺️ Bölge İhlali! Araç belirlenen coğrafi bölge sınırlarının dışına çıktı."
-                        }
-
-            # 🔑 [5] فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
-                        # 🔑 فحص تشغيل/إطفاء المحرك أو قطع الكهرباء
-            if not is_alarm and (event_type in ["ignitionOn", "ignitionOff", "alarm"] or alarm_type in ["ignition", "powercut", "poweroff"]):
+            # 🔑 [2] فحص تشغيل/إطفاء المحرك (ACC) أو قطع الكهرباء (يجب أن يسبق الحساب الرياضي للسياج)
+            elif event_type in ["ignitionOn", "ignitionOff"] or alarm_type in ["ignition", "powercut", "poweroff"]:
                 if alarm_type in ["powercut", "poweroff"]:
                     is_alarm = True
                     save_type = 'ignition'
@@ -1272,7 +1199,7 @@ def traccar_webhook(request):
                         "en": "Vehicle Status: Device power / battery disconnected ⚠️",
                         "tr": "Araç Durumu: Cihazın elektriği / aküsü kesildi ⚠️"
                     }
-                elif device.acc_alert_active:  # <-- يرسل إشعار تشغيل/إطفاء المحرك فقط إذا كان المفتاح مفعلاً
+                elif getattr(device, 'acc_alert_active', True):
                     is_alarm = True
                     save_type = 'ignition'
                     if event_type == "ignitionOn" or alarm_type == "ignition":
@@ -1286,6 +1213,75 @@ def traccar_webhook(request):
                             "ar": "حالة المركبة: تم إطفاء محرك السيارة 🔴",
                             "en": "Vehicle Status: Vehicle engine turned OFF 🔴",
                             "tr": "Araç Durumu: Araç motoru durduruldu 🔴"
+                        }
+
+            # 🏃‍♂️ [3] فحص تجاوز السرعة
+            elif speed_setting and speed_setting.is_active and (current_speed > speed_setting.max_speed or event_type == "deviceOverspeed"):
+                is_alarm = True
+                save_type = 'speed'
+                bodies = {
+                    "ar": f"⚠️ تجاوز حد السرعة! السيارة تسير بسرعة ({current_speed} كم/س)، والحد الأقصى هو ({speed_setting.max_speed} كم/س).",
+                    "en": f"⚠️ Speed Limit Exceeded! Vehicle speed is ({current_speed} km/h), max allowed is ({speed_setting.max_speed} km/h).",
+                    "tr": f"⚠️ Hız Sınırı Aşıldı! Araç hızı ({current_speed} km/s), izin verilen sınır ({speed_setting.max_speed} km/s)."
+                }
+
+            # 📳 [4] فحص الاهتزاز
+            elif vibration_setting and vibration_setting.is_active and (
+                alarm_type in ["vibration", "tampering", "shock", "movement"] or 
+                str(attributes.get('event', '')).lstrip('0') == '1'
+            ):
+                is_alarm = True
+                save_type = 'shock'
+                bodies = {
+                    "ar": f"📳 تحذير اهتزاز! تم رصد اهتزاز أو محاولة تلاعب بالمركبة ({device.name}).",
+                    "en": f"📳 Vibration Warning! Vibration or tampering detected on vehicle ({device.name}).",
+                    "tr": f"📳 Titreşim Uyarısı! ({device.name}) aracında titreşim veya müdahale algılandı."
+                }
+
+            # 🗺️ [5] فحص السياج الجغرافي (دائري ومستطيل)
+            elif geofence_setting and geofence_setting.is_active:
+                out_of_bounds = (
+                    event_type in ["geofenceExit"] or 
+                    alarm_type in ["geofenceExit", "geofence"] or 
+                    attributes.get('out_geofence', False)
+                )
+                
+                lat, lon = position.get('latitude'), position.get('longitude')
+                
+                # نفحص الإحداثيات رياضياً فقط إذا لم يكن هناك حدث آخر محدد
+                if not out_of_bounds and lat is not None and lon is not None and event_type in ["", "deviceMoving", "deviceUnknown"]:
+                    if geofence_setting.geofence_type == "circle":
+                        if geofence_setting.center_latitude and geofence_setting.center_longitude and geofence_setting.max_radius:
+                            dist_meters = calculate_distance_meters(
+                                lat, lon,
+                                geofence_setting.center_latitude,
+                                geofence_setting.center_longitude
+                            )
+                            if dist_meters > geofence_setting.max_radius:
+                                out_of_bounds = True
+                                
+                    elif geofence_setting.geofence_type == "rectangle":
+                        if all([geofence_setting.ne_latitude, geofence_setting.ne_longitude, 
+                                geofence_setting.sw_latitude, geofence_setting.sw_longitude]):
+                            is_outside_lat = not (geofence_setting.sw_latitude <= lat <= geofence_setting.ne_latitude)
+                            is_outside_lon = not (geofence_setting.sw_longitude <= lon <= geofence_setting.ne_longitude)
+                            if is_outside_lat or is_outside_lon:
+                                out_of_bounds = True
+
+                if out_of_bounds:
+                    is_alarm = True
+                    save_type = 'geofence'
+                    if geofence_setting.geofence_type == "circle" and geofence_setting.max_radius:
+                        bodies = {
+                            "ar": f"🗺️ تجاوز النطاق! خرجت السيارة عن محيط السياج الجغرافي المسموح به ({geofence_setting.max_radius} متر).",
+                            "en": f"🗺️ Geofence Exit! Vehicle exited the allowed perimeter ({geofence_setting.max_radius} meters).",
+                            "tr": f"🗺️ Bölge İhlali! Araç izin verilen güvenli alan sınırının ({geofence_setting.max_radius} metre) dışına çıktı."
+                        }
+                    else:
+                        bodies = {
+                            "ar": "🗺️ تجاوز النطاق! خرجت السيارة عن حدود المنطقة الجغرافية المحددة.",
+                            "en": "🗺️ Geofence Exit! Vehicle exited the designated geographic zone.",
+                            "tr": "🗺️ Bölge İhlali! Araç belirlenen coğrafi bölge sınırlarının dışına çıktı."
                         }
 
             if not is_alarm:
