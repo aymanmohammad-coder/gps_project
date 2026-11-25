@@ -1304,29 +1304,43 @@ def traccar_webhook(request):
                 current_speed=current_speed
             )
 
-            # 🚀 إرسال الإشعار عبر Firebase
+              # 🚀 إرسال الإشعار عبر Firebase
             fcm_tokens = list(UserDeviceToken.objects.filter(user=user).values_list('fcm_token', flat=True))
             if fcm_tokens:
+                # تجهيز الكائن بالصيغة المطلوبة
+                notification_payload = {
+                    "title": titles,
+                    "body": bodies
+                }
+
                 android_settings = messaging.AndroidConfig(
+                    priority="high",
                     notification=messaging.AndroidNotification(
                         channel_id=str(save_type).upper(),
                         click_action="FLUTTER_NOTIFICATION_CLICK",
                         sound="default"
                     )
                 )
+                
                 message = messaging.MulticastMessage(
-                    # إرسال Data-only أو إبقاء notification كنسخة احتياطية
+                    # 1. لإظهار الإشعار تلقائياً في شريط الإشعارات (باللغة العربية كافتراضي مثلاً)
+                    notification=messaging.Notification(
+                        title=titles["ar"],
+                        body=bodies["ar"]
+                    ),
+                    # 2. إرسال اللغات الثلاث بالهيكلية التي طلبتها تماماً لكي يقرأها تطبيق Flutter
                     data={
                         "device_id": str(device.id),
                         "event_type": str(save_type).upper(),
-                        "titles": json.dumps(titles, ensure_ascii=False),
-                        "bodies": json.dumps(bodies, ensure_ascii=False),
+                        "notification": json.dumps(notification_payload, ensure_ascii=False),
                         "click_action": "FLUTTER_NOTIFICATION_CLICK"
                     },
                     android=android_settings,
                     tokens=fcm_tokens,
                 )
+                
                 response = messaging.send_each_for_multicast(message)
+
                 
               
                 if response.failure_count > 0:
