@@ -1189,8 +1189,9 @@ def traccar_webhook(request):
                     "tr": f"🚨 Acil SOS Çağrısı! ({sos_index}) numaralı acil durum hattı aranıyor."
                 }
 
-            # 🔑 [2] فحص تشغيل/إطفاء المحرك (ACC) أو قطع الكهرباء (يجب أن يسبق الحساب الرياضي للسياج)
-            elif event_type in ["ignitionOn", "ignitionOff"] or alarm_type in ["ignition", "powercut", "poweroff"]:
+                        # 🔑 فحص تشغيل/إطفاء المحرك (ACC) أو قطع الكهرباء
+            raw_evt_code = str(attributes.get('event', ''))
+            if event_type in ["ignitionOn", "ignitionOff"] or alarm_type in ["ignition", "powercut", "poweroff"] or raw_evt_code in ["26", "27"]:
                 if alarm_type in ["powercut", "poweroff"]:
                     is_alarm = True
                     save_type = 'ignition'
@@ -1202,7 +1203,8 @@ def traccar_webhook(request):
                 elif getattr(device, 'acc_alert_active', True):
                     is_alarm = True
                     save_type = 'ignition'
-                    if event_type == "ignitionOn" or alarm_type == "ignition":
+                    is_on = (event_type == "ignitionOn" or alarm_type == "ignition" or raw_evt_code == "26")
+                    if is_on:
                         bodies = {
                             "ar": "حالة المركبة: تم تشغيل محرك السيارة 🟢",
                             "en": "Vehicle Status: Vehicle engine turned ON 🟢",
