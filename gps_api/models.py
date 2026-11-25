@@ -10,7 +10,13 @@ def get_default_expiration():
 
 
 class UserProfile(models.Model):
+    LANGUAGE_CHOICES = [
+        ('ar', 'العربية'),
+        ('en', 'English'),
+        ('tr', 'Türkçe'),
+    ]
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    language = models.CharField(max_length=5, choices=LANGUAGE_CHOICES, default='ar')
     mobile_num = models.CharField(max_length=20, unique=True)
     otp_code = models.CharField(max_length=6, blank=True, null=True)
     otp_created_at = models.DateTimeField(blank=True, null=True)

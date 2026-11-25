@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from gps_api.views import LiveGPSLocationAPI,ChangePasswordAPI
+from gps_api.views import LiveGPSLocationAPI,ChangePasswordAPI,UpdateUserLanguageAPI
 from gps_api.views import AddGPSDeviceAPI,GetMyDevicesAPI,VehicleLicenseAPI
 from gps_api.views import OilChangeRecordAPI, OilStatusAPI,CreateOrUpdatePinCodeView ,VerifyPinCodeView
 from gps_api.views import UserProfileAPI,RegisterAPI, LoginAPI, LogoutAPI,VerifyOTPAPI,ForgetPasswordRequestAPI,ResetPasswordConfirmAPI
@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/auth/logout/', LogoutAPI.as_view(), name='auth_logout'),
     path('api/auth/change-password/', ChangePasswordAPI.as_view(),name='change_password'),
     path('api/auth/profile/', UserProfileAPI.as_view(), name='user_profile'),
+    path('api/user/language/', UpdateUserLanguageAPI.as_view(), name='update-user-language'),
     # مسار الـ API الجديد الخاص بك
     path('api/gps/live/', LiveGPSLocationAPI.as_view(), name='live-gps-location'),
     path('api/gps/add/', AddGPSDeviceAPI.as_view(), name='add_gps_device'),
@@ -66,6 +67,7 @@ urlpatterns = [
     # مسار حذف رحلة واحدة محددة
     path('api/devices/<int:device_id>/trips/<int:trip_id>/', GPSTripListView.as_view(), name='delete_single_trip'),
      path('api/device/acc-control/', AccControlAPI.as_view(), name='acc-control'),
+     
 
 ]
   
